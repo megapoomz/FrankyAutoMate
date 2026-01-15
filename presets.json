@@ -1,0 +1,24 @@
+[
+  {
+    "name": "ggg",
+    "hotkey": "<97>",
+    "actions": [
+      {
+        "type": "click",
+        "x": 414,
+        "y": 59,
+        "button": "left",
+        "relative": true,
+        "mode": "background",
+        "stop_after": false
+      },
+      {
+        "type": "hotkey",
+        "content": "ctrl+a"
+      }
+    ],
+    "loop_count": 1,
+    "target_hwnd": null,
+    "target_title": "ตำนานเทพกู้จักรวาล (พากย์ไทย) บทที่33 - BiliBili - MEGAFRANK - Microsoft​ Edge"
+  }
+]
