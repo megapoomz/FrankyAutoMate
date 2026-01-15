@@ -2,7 +2,7 @@
 ; SEE THE DOCUMENTATION FOR DETAILS ON CREATING INNO SETUP SCRIPT FILES!
 
 #define MyAppName "Franky AutoMate"
-#define MyAppVersion "1.6.0"
+#define MyAppVersion "1.5.0"
 #define MyAppPublisher "FrankyDev"
 #define MyAppURL "https://github.com/MEGAFRANK/FrankyAutoMate"
 #define MyAppExeName "FrankyAutoMate.exe"

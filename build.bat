@@ -2,7 +2,7 @@
 setlocal
 
 set APP_NAME=FrankyAutoMate
-set VERSION=1.6.0
+set VERSION=1.5.0
 set MAIN_SCRIPT=main.py
 set EXE_NAME=FrankyAutoMate.exe
 
