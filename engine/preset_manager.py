@@ -6,13 +6,18 @@ import win32gui
 from tkinter import filedialog, messagebox
 from core.constants import COLOR_SUCCESS
 
+
 class PresetMixin:
     """Handles preset loading, saving, and switching"""
+
     def create_default_preset(self):
-        self.presets = [{"name": "ชุดที่ 1", "hotkey": None, "actions": [], "loop_count": 1, "target_hwnd": None, "target_title": "ทั้งหน้าจอ (Global)"}]
+        self.presets = [
+            {"name": "ชุดที่ 1", "hotkey": None, "actions": [], "loop_count": 1, "target_hwnd": None, "target_title": "ทั้งหน้าจอ (Global)"}
+        ]
 
     def get_current_preset(self):
-        if 0 <= self.current_preset_index < len(self.presets): return self.presets[self.current_preset_index]
+        if 0 <= self.current_preset_index < len(self.presets):
+            return self.presets[self.current_preset_index]
         return None
 
     def save_current_to_preset(self):
@@ -22,9 +27,11 @@ class PresetMixin:
                 preset["actions"] = self.actions.copy()
             preset["target_hwnd"] = self.target_hwnd
             preset["target_title"] = self.target_title
-            try: preset["loop_count"] = int(self.entry_loop.get())
-            except (ValueError, TypeError): preset["loop_count"] = 1
-            
+            try:
+                preset["loop_count"] = int(self.entry_loop.get())
+            except (ValueError, TypeError):
+                preset["loop_count"] = 1
+
             # Stealth Settings
             preset["stealth_move"] = self.var_stealth_move.get()
             preset["stealth_jitter"] = self.var_stealth_jitter.get()
@@ -36,38 +43,43 @@ class PresetMixin:
         if 0 <= index < len(self.presets):
             # Clear old cache to save memory
             self.image_cache.clear()
-            
+
             preset = self.presets[index]
             with self.actions_lock:
                 self.actions = preset.get("actions", []).copy()
             self.target_hwnd = preset.get("target_hwnd")
             self.target_title = preset.get("target_title", "ทั้งหน้าจอ (Global)")
-            
+
             # --- Restoration Logic: Try to find HWND by Title if missing ---
             if not self.target_hwnd and self.target_title != "ทั้งหน้าจอ (Global)":
+
                 def find_it(hwnd, ctx):
                     if win32gui.IsWindowVisible(hwnd) and self.target_title in win32gui.GetWindowText(hwnd):
                         self.target_hwnd = hwnd
-                        return False # Stop enumeration
+                        return False  # Stop enumeration
                     return True
-                try: win32gui.EnumWindows(find_it, None)
-                except Exception: pass
-            
+
+                try:
+                    win32gui.EnumWindows(find_it, None)
+                except Exception:
+                    pass
+
             self.lbl_target.configure(text=f"เป้าหมาย: {self.target_title}")
             self.entry_loop.delete(0, "end")
             self.entry_loop.insert(0, str(preset.get("loop_count", 1)))
-            
+
             # Restore Stealth Settings
             self.var_stealth_move.set(preset.get("stealth_move", False))
             self.var_stealth_jitter.set(preset.get("stealth_jitter", False))
             self.var_stealth_jitter_radius.set(preset.get("stealth_jitter_radius", 3.0))
             self.var_stealth_timing.set(preset.get("stealth_timing", False))
             self.var_stealth_timing_val.set(preset.get("stealth_timing_val", 0.2))
-            
+
             self.update_list_display()
 
     def update_preset_ui(self):
-        if not self.presets: return
+        if not self.presets:
+            return
         names = [p["name"] for p in self.presets]
         self.preset_dropdown.configure(values=names)
         preset = self.get_current_preset()
@@ -91,7 +103,8 @@ class PresetMixin:
 
     def load_presets_logic(self, filepath, is_startup=False):
         try:
-            with open(filepath, "r", encoding="utf-8") as f: loaded = json.load(f)
+            with open(filepath, "r", encoding="utf-8") as f:
+                loaded = json.load(f)
             if loaded and isinstance(loaded, list):
                 self.presets = loaded
                 self.current_preset_index = 0
@@ -102,13 +115,21 @@ class PresetMixin:
                 msg = f"โหลดแล้ว: {len(self.presets)} ชุด"
                 self.lbl_status.configure(text=msg, text_color="#27ae60")
         except Exception as e:
-            if not is_startup: print(f"Load Error: {e}")
+            if not is_startup:
+                print(f"Load Error: {e}")
             pass
 
     def add_new_preset(self):
         self.save_current_to_preset()
         new_idx = len(self.presets) + 1
-        new_p = {"name": f"ชุดที่ {new_idx}", "hotkey": None, "actions": [], "loop_count": 1, "target_hwnd": None, "target_title": "ทั้งหน้าจอ (Global)"}
+        new_p = {
+            "name": f"ชุดที่ {new_idx}",
+            "hotkey": None,
+            "actions": [],
+            "loop_count": 1,
+            "target_hwnd": None,
+            "target_title": "ทั้งหน้าจอ (Global)",
+        }
         self.presets.append(new_p)
         self.current_preset_index = len(self.presets) - 1
         self.load_preset_to_ui(self.current_preset_index)
@@ -120,14 +141,15 @@ class PresetMixin:
         """Duplicate existing preset with all its actions and settings"""
         self.save_current_to_preset()
         curr_p = self.get_current_preset()
-        if not curr_p: return
-        
+        if not curr_p:
+            return
+
         # Deep copy the preset data except UI specific transient fields
         new_p = json.loads(json.dumps(curr_p))
         new_p["name"] = f"{curr_p['name']} (ก๊อปปี้)"
-        new_p["hotkey"] = None # Reset hotkey for the copy
-        new_p["target_hwnd"] = None # Reset transient handle
-        
+        new_p["hotkey"] = None  # Reset hotkey for the copy
+        new_p["target_hwnd"] = None  # Reset transient handle
+
         self.presets.append(new_p)
         self.current_preset_index = len(self.presets) - 1
         self.load_preset_to_ui(self.current_preset_index)
@@ -181,13 +203,16 @@ class PresetMixin:
             if path:
                 self.save_presets_logic(path)
                 self.lbl_status.configure(text=f"บันทึกแล้ว: {os.path.basename(path)}", text_color="#27ae60")
-        except Exception: pass
+        except Exception:
+            pass
 
     def auto_save_presets(self):
         # Debounce: only save once per 1000ms even if called rapidly (PERF-2: increased from 500ms)
-        if hasattr(self, '_auto_save_timer'):
-            try: self.after_cancel(self._auto_save_timer)
-            except Exception: pass
+        if hasattr(self, "_auto_save_timer"):
+            try:
+                self.after_cancel(self._auto_save_timer)
+            except Exception:
+                pass
         self._auto_save_timer = self.after(1000, self._do_auto_save)
 
     def _do_auto_save(self):
@@ -200,17 +225,21 @@ class PresetMixin:
     def load_presets_from_file(self):
         try:
             path = filedialog.askopenfilename(filetypes=[("ไฟล์ JSON", "*.json")])
-            if path: self.load_presets_logic(path)
-        except Exception: pass
+            if path:
+                self.load_presets_logic(path)
+        except Exception:
+            pass
 
     def run_preset(self, index):
-        if self.is_running: return
+        if self.is_running:
+            return
         self.save_current_to_preset()
         self.current_preset_index = index
         self.load_preset_to_ui(index)
         self.update_preset_ui()
         p = self.get_current_preset()
-        if p: self.log_message(f"เริ่มทำงานชุด: {p['name']}")
+        if p:
+            self.log_message(f"เริ่มทำงานชุด: {p['name']}")
         self.run_automation()
 
     def load_presets_on_startup(self):

@@ -51,12 +51,14 @@ if exist "upx\upx.exe" (
 if exist "FrankyAutoMate.spec" (
     echo    - Using existing .spec file
     pyinstaller !UPX_CMD! --clean "FrankyAutoMate.spec"
-) else if not exist "icon.ico" (
-    echo [WARNING] icon.ico not found. Building without icon...
-    pyinstaller --noconsole --onefile --name "%APP_NAME%" !UPX_CMD! --clean "%MAIN_SCRIPT%"
 ) else (
-    echo    - Using icon: icon.ico
-    pyinstaller --noconsole --onefile --name "%APP_NAME%" --icon="icon.ico" !UPX_CMD! --clean "%MAIN_SCRIPT%"
+    if not exist "icon.ico" (
+        echo [WARNING] icon.ico not found. Building without icon...
+        pyinstaller --noconsole --onefile --name "%APP_NAME%" !UPX_CMD! --clean "%MAIN_SCRIPT%"
+    ) else (
+        echo    - Using icon: icon.ico
+        pyinstaller --noconsole --onefile --name "%APP_NAME%" --icon="icon.ico" !UPX_CMD! --clean "%MAIN_SCRIPT%"
+    )
 )
 
 if not exist "dist\%EXE_NAME%" (
@@ -73,15 +75,19 @@ echo    - Created: !ZIP_NAME!
 
 :: 5. Create Installer (Optional)
 echo [4/4] Checking for Inno Setup...
-set ISCC="C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
-if exist %ISCC% (
-    echo    - Inno Setup found. Compiling installer...
-    %ISCC% /DMyAppVersion="!VERSION!" setup_script.iss
-    echo    - Installer created in Output/ folder
-) else (
-    echo    [WARNING] Inno Setup compiler (ISCC.exe) not found at default location.
-    echo    Skipping installer creation. (Install Inno Setup to enable this step)
-)
+set "ISCC=C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
+if not exist "%ISCC%" goto :SkipInstaller
+
+echo    - Inno Setup found. Compiling installer...
+"%ISCC%" /DMyAppVersion="!VERSION!" setup_script.iss
+echo    - Installer created in Output/ folder
+goto :InstallerDone
+
+:SkipInstaller
+echo    [WARNING] Inno Setup compiler (ISCC.exe) not found at default location.
+echo    Skipping installer creation. (Install Inno Setup to enable this step)
+
+:InstallerDone
 
 echo ===================================================
 echo     Build Complete!

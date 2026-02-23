@@ -4,10 +4,11 @@ Run this file to start the application
 
 Usage:
     python main.py
-    
+
 Or run the package:
     python -m franky
 """
+
 import sys
 import os
 import ctypes
@@ -25,12 +26,14 @@ except Exception:
         pass
 
 # Import and run the main application
-from autoclick import AutoMationApp
+from autoclick import AutoMationApp  # noqa: E402
+
 
 def main():
     """Start the Franky AutoMate application"""
     app = AutoMationApp()
     app.mainloop()
+
 
 if __name__ == "__main__":
     main()

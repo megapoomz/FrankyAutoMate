@@ -1,22 +1,33 @@
 import threading
 
+
 class HotkeyMixin:
     """Handles global hotkeys, key recording, and key normalization"""
+
     def _key_to_string(self, key):
-        if isinstance(key, str): return key.lower()
+        if isinstance(key, str):
+            return key.lower()
         try:
-            if hasattr(key, 'char') and key.char:
+            if hasattr(key, "char") and key.char:
                 c = key.char
-                if ord(c) < 32: return chr(ord(c) + 96)
+                if ord(c) < 32:
+                    return chr(ord(c) + 96)
                 return c.lower()
             name = str(key).replace("Key.", "").lower()
             mapping = {
-                "ctrl_l": "ctrl", "ctrl_r": "ctrl",
-                "alt_l": "alt", "alt_r": "alt", "alt_gr": "alt",
-                "shift_l": "shift", "shift_r": "shift",
-                "cmd": "win", "cmd_l": "win", "cmd_r": "win",
+                "ctrl_l": "ctrl",
+                "ctrl_r": "ctrl",
+                "alt_l": "alt",
+                "alt_r": "alt",
+                "alt_gr": "alt",
+                "shift_l": "shift",
+                "shift_r": "shift",
+                "cmd": "win",
+                "cmd_l": "win",
+                "cmd_r": "win",
                 "caps_lock": "capslock",
-                "page_up": "pgup", "page_down": "pgdn"
+                "page_up": "pgup",
+                "page_down": "pgdn",
             }
             return mapping.get(name, name)
         except Exception:
@@ -24,13 +35,13 @@ class HotkeyMixin:
 
     def on_global_hotkey(self, key):
         key_str = self._key_to_string(key)
-        if not hasattr(self, '_held_keys_lock'):
+        if not hasattr(self, "_held_keys_lock"):
             self._held_keys_lock = threading.Lock()
         with self._held_keys_lock:
             if key_str not in self.held_keys:
                 self.held_keys.add(key_str)
 
-        if getattr(self, 'recording_state', None):
+        if getattr(self, "recording_state", None):
             if key_str not in self.recorded_keys:
                 self.recorded_keys.add(key_str)
                 modifiers_list = ["ctrl", "alt", "shift", "win"]
@@ -38,7 +49,7 @@ class HotkeyMixin:
                 others = [k for k in self.recorded_keys if k not in modifiers_list]
                 all_keys = [k for k in (sorted(modifiers) + sorted(others)) if k]
                 self.current_recorded_str = "+".join(all_keys)
-                
+
                 if self.recording_state == "main_hotkey":
                     self.after(0, lambda: self.lbl_hotkey.configure(text=f"[ {self.current_recorded_str.upper()} ]"))
                 elif self.recording_state == "preset_hotkey":
@@ -47,8 +58,9 @@ class HotkeyMixin:
                     self.after(0, lambda: self.entry_text.delete(0, "end"))
                     self.after(0, lambda: self.entry_text.insert(0, self.current_recorded_str))
                     self.after(0, lambda: self.var_input_mode.set("hotkey"))
-            
-            if hasattr(self, '_commit_timer'): self.after_cancel(self._commit_timer)
+
+            if hasattr(self, "_commit_timer"):
+                self.after_cancel(self._commit_timer)
             self._commit_timer = self.after(800, self.commit_recorded_keys)
             return
 
@@ -59,12 +71,12 @@ class HotkeyMixin:
         current_modifiers = [k for k in keys_snapshot if k in modifiers_list]
         current_others = [k for k in keys_snapshot if k not in modifiers_list]
         current_full = "+".join(sorted(current_modifiers) + sorted(current_others))
-        
+
         # Normalize toggle_key the same way we normalize current_full
-        toggle_mods = [k for k in self.toggle_key.lower().split('+') if k.strip() in modifiers_list]
-        toggle_others = [k for k in self.toggle_key.lower().split('+') if k.strip() not in modifiers_list]
+        toggle_mods = [k for k in self.toggle_key.lower().split("+") if k.strip() in modifiers_list]
+        toggle_others = [k for k in self.toggle_key.lower().split("+") if k.strip() not in modifiers_list]
         toggle_normalized = "+".join(sorted(m.strip() for m in toggle_mods) + sorted(o.strip() for o in toggle_others))
-        
+
         if current_full == toggle_normalized:
             with self._held_keys_lock:
                 self.held_keys.clear()  # Clear to prevent ghost key state
@@ -82,7 +94,7 @@ class HotkeyMixin:
 
     def on_global_release(self, key):
         key_str = self._key_to_string(key)
-        if not hasattr(self, '_held_keys_lock'):
+        if not hasattr(self, "_held_keys_lock"):
             self._held_keys_lock = threading.Lock()
         with self._held_keys_lock:
             self.held_keys.discard(key_str)
@@ -96,7 +108,7 @@ class HotkeyMixin:
         self.recording_state = None
         self.recorded_keys = set()
         self.current_recorded_str = ""
-        
+
         if state == "main_hotkey":
             self.toggle_key = final_str
             self.lbl_status.configure(text=f"ตั้งค่า Hotkey หลักเป็น {final_str.upper()} แล้ว", text_color="#2ecc71")
@@ -128,10 +140,12 @@ class HotkeyMixin:
         """Build and Start Global Hotkey Engine"""
         try:
             from pynput import keyboard as pynput_keyboard
+
             self.listener = pynput_keyboard.Listener(on_press=self.on_global_hotkey, on_release=self.on_global_release)
             self.listener.daemon = True
             self.listener.start()
         except Exception as e:
             import logging
+
             logging.warning(f"Hotkey listener failed to start: {e}")
             self.listener = None

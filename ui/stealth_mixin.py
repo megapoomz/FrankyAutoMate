@@ -1,5 +1,5 @@
 import random
-import customtkinter as ctk
+
 
 class StealthMixin:
     """Handles stealth-related UI logic and window management"""
