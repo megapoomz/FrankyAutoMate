@@ -1,14 +1,29 @@
 import customtkinter as ctk
 import os
 from tkinter import messagebox
-from core.constants import COLOR_INNER, BORDER_COLOR, COLOR_ACCENT, COLOR_SUCCESS, COLOR_MUTED
-
+from core.constants import COLOR_INNER, BORDER_COLOR, COLOR_SUCCESS, COLOR_MUTED, WAIT_MODE_TIMEOUT
 
 class VisionMixin:
     """Handles AI Vision & OCR UI and actions"""
 
     def setup_vision_tab(self):
         t = self.tab_vision
+
+        # Check if pytesseract is available and warn if not
+        try:
+            import pytesseract  # noqa: F401 — availability check only
+            _has_pytesseract = True
+        except ImportError:
+            _has_pytesseract = False
+
+        if not _has_pytesseract:
+            ctk.CTkLabel(
+                t,
+                text="⚠️ pytesseract ไม่พร้อมใช้งาน กรุณาติดตั้ง: pip install pytesseract",
+                font=("Inter", 12, "bold"),
+                text_color="#f59e0b",
+                wraplength=400,
+            ).pack(pady=(10, 5))
 
         # --- Section 1: OCR (Text Recognition) ---
         ctk.CTkLabel(t, text="ค้นหาด้วยข้อความ (OCR SEARCH)", font=("Inter", 10, "bold"), text_color="#64748b").pack(
@@ -32,6 +47,10 @@ class VisionMixin:
         self.var_ocr_click_val = ctk.BooleanVar(value=True)
         self.cb_ocr_click = ctk.CTkCheckBox(f_row2, text="คลิกเมื่อพบ", variable=self.var_ocr_click_val, font=("Inter", 11))
         self.cb_ocr_click.pack(side="left", padx=15)
+
+        # Add stop_after checkbox (was missing, making stop_after always False)
+        self.var_ocr_stop = ctk.BooleanVar(value=False)
+        ctk.CTkCheckBox(f_row2, text="จบหลังเจอ", variable=self.var_ocr_stop, font=("Inter", 11)).pack(side="left", padx=5)
 
         # Row 3: Button + Click Mode (separated to avoid overflow)
         f_row3 = ctk.CTkFrame(f_ocr, fg_color="transparent")
@@ -101,19 +120,7 @@ class VisionMixin:
             self.lbl_status.configure(text=f"เชื่อมต่อ Tesseract สำเร็จ: {os.path.basename(p)}", text_color=COLOR_SUCCESS)
             messagebox.showinfo("สำเร็จ", f"ตั้งค่าตำแหน่ง Tesseract ใหม่แล้วที่:\n{p}", parent=self)
 
-    def install_ai_dependencies(self):
-        from utils.dep_installer import DependencyInstaller
-
-        self.btn_install_dep.configure(state="disabled", text="กำลังดำเนินการ...")
-        self.lbl_status.configure(text="เริ่มกระบวนการติดตั้ง Dependencies...", text_color=COLOR_ACCENT)
-
-        def update_status(msg):
-            self.lbl_status.configure(text=msg)
-            if "สำเร็จ" in msg or "ผิดพลาด" in msg:
-                self.btn_install_dep.configure(state="normal", text="ติดตั้ง AI Dependencies อัตโนมัติ")
-
-        DependencyInstaller.install_pytesseract(update_status)
-        DependencyInstaller.setup_tesseract(self, update_status)
+    # DC-A3: install_ai_dependencies removed (dead code — no UI button referenced it)
 
     def add_ocr_action(self):
         txt = self.entry_ocr_text.get().strip()
@@ -121,14 +128,30 @@ class VisionMixin:
             messagebox.showwarning("แจ้งเตือน", "กรุณาระบุข้อความที่ต้องการค้นหา", parent=self)
             return
 
+        # Warn when using wait mode without region (full-screen OCR is very slow)
+        ocr_mode = self.var_ocr_mode.get()
+        if ocr_mode == "wait" and not self.current_region:
+            proceed = messagebox.askyesno(
+                "⚠️ แจ้งเตือนประสิทธิภาพ",
+                "คุณเลือกโหมด 'wait' โดยไม่ได้ตีกรอบพื้นที่\n\n"
+                "OCR ทั้งจอจะช้ามาก (2-15 วินาทีต่อรอบ)\n"
+                "แนะนำให้ตีกรอบพื้นที่ก่อน\n\n"
+                "ต้องการเพิ่มคำสั่งต่อไปหรือไม่?",
+                parent=self,
+            )
+            if not proceed:
+                return
+
         action = {
             "type": "ocr_search",
             "text": txt,
-            "mode": self.var_ocr_mode.get(),
+            "mode": ocr_mode,
             "do_click": self.var_ocr_click_val.get(),
             "region": self.current_region,
             "click_mode": self.var_ocr_click_mode.get(),
             "button": self.var_ocr_click_btn.get(),
+            "stop_after": self.var_ocr_stop.get(),  # Now properly wired to UI checkbox
+            "max_wait_time": WAIT_MODE_TIMEOUT,  # Include timeout
         }
 
         self.add_action_item(action)

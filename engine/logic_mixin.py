@@ -2,7 +2,6 @@ import random
 import customtkinter as ctk
 from core.constants import COLOR_INNER, BORDER_COLOR, COLOR_ACCENT, COLOR_SUCCESS, COLOR_MUTED
 
-
 class LogicMixin:
     """Handles logic-based UI and action creation (If/Then, Jumps, Labels)"""
 
@@ -186,7 +185,8 @@ class LogicMixin:
             if target == "(ไม่มี Label)":
                 return
             action = {"type": "logic_if", "condition": cond, "target_label": target, "jump_on": "true"}
-            self._fill_action_params(action)
+            if not self._fill_action_params(action):
+                return  # Validation failed
             self.add_action_item(action)
             self.lbl_status.configure(text=f"เพิ่ม IF (Jump) -> {target}", text_color=COLOR_SUCCESS)
 
@@ -196,7 +196,8 @@ class LogicMixin:
             end_label = f"End_IF_{random.randint(1000, 9999)}"
 
             action = {"type": "logic_if", "condition": cond, "target_label": end_label, "jump_on": "false"}
-            self._fill_action_params(action)
+            if not self._fill_action_params(action):
+                return  # Validation failed
             with self.actions_lock:
                 self.actions.append(action)
                 self.actions.append({"type": "logic_label", "name": end_label})
@@ -213,7 +214,8 @@ class LogicMixin:
             end_label = f"End_IF_{rid}"
 
             action = {"type": "logic_if", "condition": cond, "target_label": else_label, "jump_on": "false"}
-            self._fill_action_params(action)
+            if not self._fill_action_params(action):
+                return  # Validation failed
             with self.actions_lock:
                 self.actions.append(action)
                 self.actions.append({"type": "logic_else", "target_label": end_label})
@@ -224,16 +226,23 @@ class LogicMixin:
             self.auto_save_presets()
             self.lbl_status.configure(text="เพิ่ม IF/ELSE Block", text_color=COLOR_SUCCESS)
 
-        self.update_list_display()
-        self.auto_save_presets()
-
     def _fill_action_params(self, action):
         cond = action["condition"]
         if cond == "image_found":
+            # Validate image path exists before creating action
+            if not getattr(self, "current_img_path", ""):
+                from tkinter import messagebox
+                messagebox.showwarning("แจ้งเตือน", "กรุณาเลือกรูปภาพก่อนสร้างเงื่อนไข", parent=self)
+                return False
             action["path"] = self.current_img_path
             action["region"] = self.current_region
             action["confidence"] = self.var_logic_conf.get()
-        elif cond == "color_match" and self.current_color_data:
+        elif cond == "color_match":
+            # Validate color data exists before creating action
+            if not self.current_color_data:
+                from tkinter import messagebox
+                messagebox.showwarning("แจ้งเตือน", "กรุณาดูดสีก่อนสร้างเงื่อนไข", parent=self)
+                return False
             _, _, rgb = self.current_color_data
             action["rgb"] = rgb
             action["x"] = self.current_color_data[0]
@@ -242,6 +251,7 @@ class LogicMixin:
                 action["tolerance"] = int(self.entry_tol.get())
             except (ValueError, TypeError):
                 action["tolerance"] = 10
+        return True
 
     def add_jump_action(self):
         target = self.opt_jump_target.get()
@@ -309,5 +319,13 @@ class LogicMixin:
     def check_picker_status(self, count=0):
         # Poll for color data update (Stop after 60 seconds)
         self.update_logic_source_ui()
-        if self.state() == "normal" and count < 60:
-            self.after(1000, lambda: self.check_picker_status(count + 1))
+        # Stop polling early if color data is already picked
+        if self.current_color_data is not None:
+            return
+        try:
+            window_state = self.state()
+        except Exception:
+            return  # Window being destroyed
+        if window_state == "normal" and count < 60:
+            # Track polling timer for proper cleanup on close
+            self._track_after(1000, lambda: self.check_picker_status(count + 1))

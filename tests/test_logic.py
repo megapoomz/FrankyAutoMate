@@ -1,4 +1,5 @@
 from engine.automation_engine import EngineMixin
+import threading
 
 
 class DummyEngine(EngineMixin):
@@ -7,6 +8,8 @@ class DummyEngine(EngineMixin):
     def __init__(self):
         super().__init__()
         self.variables = {}
+        # AUD-DEADLOCK: Must be RLock (reentrant) to match production
+        self.variable_lock = threading.RLock()
 
     def log_message(self, *args, **kwargs):
         pass  # Override UI logging

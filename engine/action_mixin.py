@@ -3,7 +3,8 @@ from typing import Dict, Any
 from tkinter import filedialog, messagebox
 import customtkinter as ctk
 import pyautogui
-
+import win32api
+from core.constants import WAIT_MODE_TIMEOUT
 
 class ActionMixin:
     """Handles adding and managing actions in the script"""
@@ -92,6 +93,9 @@ class ActionMixin:
     def browse_image(self):
         p = filedialog.askopenfilename(filetypes=[("ไฟล์รูปภาพ", "*.png *.jpg *.jpeg *.bmp")])
         if p:
+            if not os.path.exists(p):
+                messagebox.showwarning("แจ้งเตือน", f"ไม่พบไฟล์: {p}", parent=self)
+                return
             self.current_img_path = p
             self.lbl_img_path.configure(text=os.path.basename(p), text_color="#2ecc71")
 
@@ -168,10 +172,17 @@ class ActionMixin:
 
         def on_click(event):
             try:
-                rgb = pyautogui.pixel(event.x_root, event.y_root)
-                if not hasattr(self, "temp_multi_points"):
-                    self.temp_multi_points = []
-                self.temp_multi_points.append({"x": event.x_root, "y": event.y_root, "rgb": rgb, "tolerance": 10})
+                # Use GetCursorPos for DPI-accurate coordinates (matching picker_mixin pattern)
+                try:
+                    cursor_pos = win32api.GetCursorPos()
+                    ax, ay = cursor_pos[0], cursor_pos[1]
+                except Exception:
+                    ax, ay = event.x_root, event.y_root
+                # COMPAT-03: Use fast Win32 GetPixel instead of slow pyautogui.pixel
+                from utils.win32_input import fast_get_pixel
+                rgb = fast_get_pixel(ax, ay)
+                # temp_multi_points is always initialized in __init__
+                self.temp_multi_points.append({"x": ax, "y": ay, "rgb": rgb, "tolerance": 10})
                 self.lbl_multi_color_count.configure(text=f"จุดที่เก็บไว้: {len(self.temp_multi_points)} จุด")
             except Exception:
                 pass
@@ -203,7 +214,9 @@ class ActionMixin:
                 "points": points.copy(),
                 "logic": self.var_multi_color_logic.get(),
                 "mode": "once",
+                "do_click": False,  # Explicitly set default
                 "stop_after": self.var_multi_color_stop.get(),
+                "max_wait_time": WAIT_MODE_TIMEOUT,  # Include timeout
             }
         )
         self.clear_multi_color_points()

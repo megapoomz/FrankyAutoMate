@@ -28,12 +28,10 @@ except Exception:
 # Import and run the main application
 from autoclick import AutoMationApp  # noqa: E402
 
-
 def main():
     """Start the Franky AutoMate application"""
     app = AutoMationApp()
     app.mainloop()
-
 
 if __name__ == "__main__":
     main()

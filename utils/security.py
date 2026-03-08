@@ -1,10 +1,8 @@
 """
-SEC-1: DPAPI-based config encryption for Windows
-SEC-2/3: Checksum verification helpers for downloaded files
+DPAPI-based config encryption and checksum verification helpers.
 
-Provides secure storage for sensitive config data (license keys, HWIDs)
-using Windows Data Protection API (DPAPI) which encrypts data with
-machine/user-specific keys.
+Provides secure storage for sensitive config data using Windows Data Protection API
+(DPAPI), which encrypts data with machine/user-specific keys.
 """
 
 import os
@@ -13,14 +11,16 @@ import hashlib
 import logging
 import base64
 
-# ── SEC-2/3: Checksum Verification ──────────────────────────────────────
+# ── Checksum Verification ───────────────────────────────────────────
 
-# Known good SHA256 hashes for trusted downloads
-KNOWN_CHECKSUMS = {
-    "tesseract-ocr-w64-setup-5.5.0.20241111.exe": "PLACEHOLDER_HASH",
-    "tesseract-ocr-w64-setup-v5.3.0.20221222.exe": "PLACEHOLDER_HASH",
+# Known good SHA256 hashes for trusted downloads.
+# These are placeholders — verification is a no-op until real hashes are added.
+# To populate: download the file, run `certutil -hashfile <file> SHA256`,
+# and paste the hex string below.
+KNOWN_CHECKSUMS: dict[str, str | None] = {
+    "tesseract-ocr-w64-setup-5.5.0.20241111.exe": None,  # TODO: Add real SHA256
+    "tesseract-ocr-w64-setup-v5.3.0.20221222.exe": None,  # TODO: Add real SHA256
 }
-
 
 def verify_file_checksum(filepath: str, expected_hash: str = None, filename: str = None) -> bool:
     """
@@ -37,9 +37,10 @@ def verify_file_checksum(filepath: str, expected_hash: str = None, filename: str
     if not expected_hash and filename:
         expected_hash = KNOWN_CHECKSUMS.get(filename)
 
-    if not expected_hash or expected_hash == "PLACEHOLDER_HASH":
-        logging.warning(f"No checksum available for {filepath}, skipping verification")
-        return True  # Allow if no known hash
+    if not expected_hash:
+        logging.warning(f"No checksum available for '{filepath}'. "
+                        "File integrity cannot be verified.")
+        return True  # Allow but warn
 
     sha256 = hashlib.sha256()
     try:
@@ -58,34 +59,35 @@ def verify_file_checksum(filepath: str, expected_hash: str = None, filename: str
         logging.error(f"Checksum verification failed: {e}")
         return False
 
-
-# ── SEC-1: DPAPI Config Encryption ──────────────────────────────────────
-
+# ── DPAPI Config Encryption ─────────────────────────────────────────
 
 def _dpapi_available():
-    """Check if DPAPI is available (Windows only)"""
+    """Check if DPAPI is available (Windows only)."""
     try:
         import ctypes
-        import ctypes.wintypes
-
         return hasattr(ctypes.windll, "crypt32")
     except Exception:
         return False
 
+# DATA_BLOB declared once at module level
+try:
+    import ctypes
+    import ctypes.wintypes
+
+    class DATA_BLOB(ctypes.Structure):
+        _fields_ = [("cbData", ctypes.wintypes.DWORD), ("pbData", ctypes.POINTER(ctypes.c_char))]
+except Exception:
+    DATA_BLOB = None
 
 def dpapi_encrypt(data: bytes) -> bytes:
-    """Encrypt data using Windows DPAPI (CurrentUser scope)"""
+    """Encrypt data using Windows DPAPI (CurrentUser scope)."""
     try:
         import ctypes
         import ctypes.wintypes
 
-        class DATA_BLOB(ctypes.Structure):
-            _fields_ = [("cbData", ctypes.wintypes.DWORD), ("pbData", ctypes.POINTER(ctypes.c_char))]
-
         input_blob = DATA_BLOB()
         input_blob.cbData = len(data)
         input_blob.pbData = ctypes.cast(ctypes.create_string_buffer(data, len(data)), ctypes.POINTER(ctypes.c_char))
-
         output_blob = DATA_BLOB()
 
         if ctypes.windll.crypt32.CryptProtectData(ctypes.byref(input_blob), None, None, None, None, 0, ctypes.byref(output_blob)):
@@ -98,20 +100,15 @@ def dpapi_encrypt(data: bytes) -> bytes:
         logging.warning(f"DPAPI encryption failed: {e}, falling back to plaintext")
         return None
 
-
 def dpapi_decrypt(encrypted: bytes) -> bytes:
-    """Decrypt DPAPI-encrypted data"""
+    """Decrypt DPAPI-encrypted data."""
     try:
         import ctypes
         import ctypes.wintypes
 
-        class DATA_BLOB(ctypes.Structure):
-            _fields_ = [("cbData", ctypes.wintypes.DWORD), ("pbData", ctypes.POINTER(ctypes.c_char))]
-
         input_blob = DATA_BLOB()
         input_blob.cbData = len(encrypted)
         input_blob.pbData = ctypes.cast(ctypes.create_string_buffer(encrypted, len(encrypted)), ctypes.POINTER(ctypes.c_char))
-
         output_blob = DATA_BLOB()
 
         if ctypes.windll.crypt32.CryptUnprotectData(ctypes.byref(input_blob), None, None, None, None, 0, ctypes.byref(output_blob)):
@@ -124,27 +121,29 @@ def dpapi_decrypt(encrypted: bytes) -> bytes:
         logging.warning(f"DPAPI decryption failed: {e}")
         return None
 
-
 def save_config_secure(config_data: dict, filepath: str):
-    """Save config data with DPAPI encryption if available, else plaintext"""
+    """Save config data with DPAPI encryption if available, else plaintext."""
     json_str = json.dumps(config_data, indent=2, ensure_ascii=False)
 
     if _dpapi_available():
         encrypted = dpapi_encrypt(json_str.encode("utf-8"))
         if encrypted:
-            # Save as base64-encoded encrypted blob
             secure_data = {"_encrypted": True, "_data": base64.b64encode(encrypted).decode("ascii")}
             with open(filepath, "w", encoding="utf-8") as f:
                 json.dump(secure_data, f, indent=2)
             return
 
     # Fallback: save plaintext
+    # SEC-03: Warn user that config is stored unencrypted
+    logging.warning(
+        f"DPAPI encryption unavailable — saving config as PLAINTEXT to '{filepath}'. "
+        "Sensitive data (presets, settings) will not be encrypted."
+    )
     with open(filepath, "w", encoding="utf-8") as f:
         f.write(json_str)
 
-
 def load_config_secure(filepath: str) -> dict:
-    """Load config data, decrypting if DPAPI-encrypted"""
+    """Load config data, decrypting if DPAPI-encrypted."""
     if not os.path.exists(filepath):
         return {}
 
@@ -153,16 +152,25 @@ def load_config_secure(filepath: str) -> dict:
             raw = json.load(f)
 
         if isinstance(raw, dict) and raw.get("_encrypted"):
-            # Encrypted config
             encrypted = base64.b64decode(raw["_data"])
             decrypted = dpapi_decrypt(encrypted)
             if decrypted:
                 return json.loads(decrypted.decode("utf-8"))
             else:
-                logging.error("Failed to decrypt config, returning empty")
+                logging.error(
+                    "Failed to decrypt config — likely created on a different "
+                    "Windows user account or machine. Config will be reset to defaults."
+                )
+                backup_path = filepath + ".dpapi_backup"
+                try:
+                    import shutil
+                    if not os.path.exists(backup_path):
+                        shutil.copy2(filepath, backup_path)
+                        logging.info(f"Backed up encrypted config to: {backup_path}")
+                except Exception:
+                    pass
                 return {}
         else:
-            # Legacy plaintext config
             return raw
     except Exception as e:
         logging.error(f"Failed to load config: {e}")

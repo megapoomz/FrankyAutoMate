@@ -1,5 +1,4 @@
-import threading
-
+from core.constants import HOTKEY_COMMIT_DELAY_MS
 
 class HotkeyMixin:
     """Handles global hotkeys, key recording, and key normalization"""
@@ -35,33 +34,42 @@ class HotkeyMixin:
 
     def on_global_hotkey(self, key):
         key_str = self._key_to_string(key)
-        if not hasattr(self, "_held_keys_lock"):
-            self._held_keys_lock = threading.Lock()
         with self._held_keys_lock:
             if key_str not in self.held_keys:
                 self.held_keys.add(key_str)
 
-        if getattr(self, "recording_state", None):
-            if key_str not in self.recorded_keys:
-                self.recorded_keys.add(key_str)
+        # Use lock for recording_state (accessed from pynput thread + main thread)
+        with self._held_keys_lock:
+            _is_recording = getattr(self, "recording_state", None)
+        if _is_recording:
+            # MED-02: Protect recorded_keys under lock to prevent race condition
+            with self._held_keys_lock:
+                if key_str not in self.recorded_keys:
+                    self.recorded_keys.add(key_str)
                 modifiers_list = ["ctrl", "alt", "shift", "win"]
                 modifiers = [k for k in self.recorded_keys if k in modifiers_list]
                 others = [k for k in self.recorded_keys if k not in modifiers_list]
                 all_keys = [k for k in (sorted(modifiers) + sorted(others)) if k]
                 self.current_recorded_str = "+".join(all_keys)
 
-                if self.recording_state == "main_hotkey":
-                    self.after(0, lambda: self.lbl_hotkey.configure(text=f"[ {self.current_recorded_str.upper()} ]"))
-                elif self.recording_state == "preset_hotkey":
-                    self.after(0, lambda: self.lbl_preset_hotkey.configure(text=f"[ {self.current_recorded_str} ]"))
-                elif self.recording_state == "action_hotkey":
-                    self.after(0, lambda: self.entry_text.delete(0, "end"))
-                    self.after(0, lambda: self.entry_text.insert(0, self.current_recorded_str))
-                    self.after(0, lambda: self.var_input_mode.set("hotkey"))
+            if self.recording_state == "main_hotkey":
+                self.after(0, lambda: self.lbl_hotkey.configure(text=f"[ {self.current_recorded_str.upper()} ]"))
+            elif self.recording_state == "preset_hotkey":
+                self.after(0, lambda: self.lbl_preset_hotkey.configure(text=f"[ {self.current_recorded_str} ]"))
+            elif self.recording_state == "action_hotkey":
+                self.after(0, lambda: self.entry_text.delete(0, "end"))
+                self.after(0, lambda: self.entry_text.insert(0, self.current_recorded_str))
+                self.after(0, lambda: self.var_input_mode.set("hotkey"))
 
-            if hasattr(self, "_commit_timer"):
-                self.after_cancel(self._commit_timer)
-            self._commit_timer = self.after(800, self.commit_recorded_keys)
+            # Schedule timer operations on main thread (pynput runs on its own thread)
+            def _reset_commit_timer():
+                if hasattr(self, "_commit_timer"):
+                    try:
+                        self.after_cancel(self._commit_timer)
+                    except Exception:
+                        pass
+                self._commit_timer = self.after(HOTKEY_COMMIT_DELAY_MS, self.commit_recorded_keys)
+            self.after(0, _reset_commit_timer)
             return
 
         # Trigger logic
@@ -85,7 +93,11 @@ class HotkeyMixin:
 
         if not self.is_running:
             for i, preset in enumerate(self.presets):
-                preset_hotkey = str(preset.get("hotkey")).lower()
+                # Skip presets with no hotkey (str(None) was "none" causing false match)
+                raw_hotkey = preset.get("hotkey")
+                if not raw_hotkey:
+                    continue
+                preset_hotkey = str(raw_hotkey).lower()
                 if preset_hotkey == current_full or preset_hotkey == key_str:
                     self.after(0, lambda idx=i: self.run_preset(idx))
                     with self._held_keys_lock:
@@ -94,26 +106,27 @@ class HotkeyMixin:
 
     def on_global_release(self, key):
         key_str = self._key_to_string(key)
-        if not hasattr(self, "_held_keys_lock"):
-            self._held_keys_lock = threading.Lock()
         with self._held_keys_lock:
             self.held_keys.discard(key_str)
 
     def commit_recorded_keys(self):
         if not self.recording_state or not self.current_recorded_str:
-            self.recording_state = None
+            with self._held_keys_lock:
+                self.recording_state = None
             return
         final_str = self.current_recorded_str
         state = self.recording_state
-        self.recording_state = None
-        self.recorded_keys = set()
-        self.current_recorded_str = ""
+        # Atomic state reset under lock
+        with self._held_keys_lock:
+            self.recording_state = None
+            self.recorded_keys = set()
+            self.current_recorded_str = ""
 
         if state == "main_hotkey":
             self.toggle_key = final_str
             self.lbl_status.configure(text=f"ตั้งค่า Hotkey หลักเป็น {final_str.upper()} แล้ว", text_color="#2ecc71")
         elif state == "preset_hotkey":
-            if 0 <= self.waiting_for_preset_key < len(self.presets):
+            if self.waiting_for_preset_key is not None and 0 <= self.waiting_for_preset_key < len(self.presets):
                 self.presets[self.waiting_for_preset_key]["hotkey"] = final_str
             self.waiting_for_preset_key = None
             self.auto_save_presets()
@@ -139,6 +152,14 @@ class HotkeyMixin:
     def setup_hotkeys(self):
         """Build and Start Global Hotkey Engine"""
         try:
+            # Stop existing listener before creating new one
+            old_listener = getattr(self, "listener", None)
+            if old_listener:
+                try:
+                    old_listener.stop()
+                except Exception:
+                    pass
+
             from pynput import keyboard as pynput_keyboard
 
             self.listener = pynput_keyboard.Listener(on_press=self.on_global_hotkey, on_release=self.on_global_release)

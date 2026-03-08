@@ -1,6 +1,5 @@
 import random
 
-
 class StealthMixin:
     """Handles stealth-related UI logic and window management"""
 
@@ -20,10 +19,3 @@ class StealthMixin:
         if self.var_stealth_hide_window.get():
             self.after(0, self.deiconify)
             self.after(50, self.lift)
-
-    # ── Running Overlay (Removed — interferes with image search) ─────
-    def show_running_overlay(self):
-        pass
-
-    def hide_running_overlay(self):
-        pass

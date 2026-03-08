@@ -17,6 +17,23 @@ from core.constants import (
 )
 from ui.ui_mixin import ToolTip
 
+# PERF-01: Module-level constant — avoids recreating dict for each action widget
+_ACTION_TITLE_MAP = {
+    "click": "Mouse Click",
+    "text": "Type Text",
+    "hotkey": "Press Key",
+    "wait": "Delay",
+    "image_search": "Find Image",
+    "color_search": "Find Color",
+    "multi_color_check": "Multi-Color",
+    "ocr_search": "OCR Read",
+    "logic_if": "IF (ถ้า...เป็นจริง)",
+    "logic_jump": "GOTO (กระโดดไปที่)",
+    "logic_else": "ELSE (ถ้าไม่จริงทำส่วนนี้)",
+    "logic_label": "จุดอ้างอิง (Label)",
+    "var_set": "Set Variable",
+    "var_math": "Calculate",
+}
 
 class TabsMixin:
     """Handles UI tab setups, action list management, and picker logic"""
@@ -626,7 +643,7 @@ class TabsMixin:
             border_color="#334155",
         ).pack(side="left")
         f_send = ctk.CTkFrame(f_tech, fg_color="transparent")
-        f_send.pack(fill="x", padx=20, pady=(0, 20))
+        f_send.pack(fill="x", padx=20, pady=(0, 10))
         ctk.CTkCheckBox(
             f_send,
             text="ใช้ SendInput API (Low-level Emulation)",
@@ -636,6 +653,40 @@ class TabsMixin:
             border_color="#334155",
             command=self.auto_save_presets,
         ).pack(side="left")
+
+        # Timing Randomization (INC-4: was missing UI for var_stealth_timing)
+        f_timing = ctk.CTkFrame(f_tech, fg_color="transparent")
+        f_timing.pack(fill="x", padx=20, pady=(0, 15))
+        cb_timing = ctk.CTkCheckBox(
+            f_timing,
+            text="สุ่มช่วงเวลาระหว่างแต่ละขั้นตอน (Timing Randomization)",
+            variable=self.var_stealth_timing,
+            font=("Inter", 12),
+            fg_color=COLOR_ACCENT,
+            border_color="#334155",
+            command=self.auto_save_presets,
+        )
+        cb_timing.pack(side="left")
+        ToolTip(cb_timing, "เพิ่มเวลาสุ่มก่อนทุกขั้นตอน ป้องกันการตรวจจับจังหวะแบบเป๊ะๆ")
+
+        f_timing_val = ctk.CTkFrame(f_tech, fg_color="transparent")
+        f_timing_val.pack(fill="x", padx=20, pady=(0, 15))
+        ctk.CTkLabel(f_timing_val, text="ระดับความสุ่ม (วินาที):", font=("Inter", 11), text_color="#94a3b8").pack(side="left", padx=(10, 10))
+        ctk.CTkSlider(
+            f_timing_val,
+            from_=0.05,
+            to=1.0,
+            number_of_steps=19,
+            width=150,
+            variable=self.var_stealth_timing_val,
+            progress_color=COLOR_ACCENT,
+            button_color=COLOR_ACCENT,
+            command=lambda v: self.auto_save_presets(),
+        ).pack(side="left")
+        ctk.CTkLabel(f_timing_val, textvariable=self.var_stealth_timing_val, font=("JetBrains Mono", 11, "bold"), text_color=COLOR_ACCENT).pack(
+            side="left", padx=10
+        )
+        ctk.CTkLabel(f_timing_val, text="s", font=("Inter", 10), text_color="#64748b").pack(side="left")
 
         ctk.CTkLabel(t, text="โหมด Stealth อาจทำให้การทำงานช้าลงเพื่อความเสมือนมนุษย์", text_color="#f59e0b", font=("Inter", 11, "italic")).pack(
             pady=10
@@ -683,13 +734,70 @@ class TabsMixin:
         ).pack(pady=15, padx=20, fill="x")
 
     def update_list_display(self):
-        for widget in self.scroll_actions.winfo_children():
-            widget.destroy()
+        # Debounce rapid calls (e.g. multiple actions added in quick succession)
+        now = time.perf_counter()
+        last = getattr(self, '_last_list_update', 0)
+        if now - last < 0.05:
+            # Defer to avoid redundant rebuilds
+            if hasattr(self, '_list_update_timer'):
+                try:
+                    self.after_cancel(self._list_update_timer)
+                except Exception:
+                    pass
+            self._list_update_timer = self.after(60, self._do_update_list_display)
+            return
+        self._last_list_update = now
+
+        # PERF-NEW-1: Check if only selection changed (no data change)
+        # If so, do a lightweight 2-widget update instead of full rebuild
+        with self.actions_lock:
+            # Hash based on action count + types + key fields for change detection
+            new_fingerprint = hash(tuple(
+                (a.get('type', ''), a.get('name', ''), a.get('content', ''), a.get('x', ''), a.get('y', ''), a.get('path', ''))
+                for a in self.actions
+            ))
+            # Quick check: if action data matches cached version, only update selection
+            if hasattr(self, '_list_fingerprint') and new_fingerprint == self._list_fingerprint:
+                old_sel = getattr(self, '_last_selected_index', -1)
+                new_sel = getattr(self, 'selected_index', -1)
+                if old_sel != new_sel and self.action_widgets:
+                    # Selection-only change: update just the 2 affected widgets
+                    from core.constants import COLOR_CARD, COLOR_INNER, COLOR_ACCENT, BORDER_COLOR
+                    # Restore old
+                    if 0 <= old_sel < len(self.action_widgets):
+                        self.action_widgets[old_sel].configure(
+                            fg_color=COLOR_CARD, border_color=BORDER_COLOR, border_width=1
+                        )
+                    # Highlight new
+                    if 0 <= new_sel < len(self.action_widgets):
+                        self.action_widgets[new_sel].configure(
+                            fg_color=COLOR_INNER, border_color=COLOR_ACCENT, border_width=2
+                        )
+                    self._last_selected_index = new_sel
+                    return
+
+        self._do_update_list_display()
+
+    def _do_update_list_display(self):
+        self._last_list_update = time.perf_counter()
+
+        # Batch-destroy old widgets (faster than individual destroy)
+        children = self.scroll_actions.winfo_children()
+        if children:
+            for widget in children:
+                widget.destroy()
         self.action_widgets = []
 
         # Thread-safe snapshot of actions for display
         with self.actions_lock:
             display_actions = list(self.actions)
+
+        # PERF-NEW-1: Save fingerprint for fast-path selection updates (must match hash() in update_list_display)
+        self._list_fingerprint = hash(tuple(
+            (a.get('type', ''), a.get('name', ''), a.get('content', ''), a.get('x', ''), a.get('y', ''), a.get('path', ''))
+            for a in display_actions
+        ))
+        self._last_selected_index = getattr(self, 'selected_index', -1)
 
         if not display_actions:
             lbl_empty = ctk.CTkLabel(
@@ -701,8 +809,9 @@ class TabsMixin:
             lbl_empty.pack(pady=40)
             return
 
-        # Sync logic labels with UI
-        if hasattr(self, "refresh_label_dropdowns"):
+        # Sync logic labels with UI (only if labels exist in actions)
+        has_labels = any(a["type"] == "logic_label" for a in display_actions)
+        if has_labels and hasattr(self, "refresh_label_dropdowns"):
             self.refresh_label_dropdowns()
 
         # Calculate Indentation Levels
@@ -738,6 +847,37 @@ class TabsMixin:
         for i, action in enumerate(display_actions):
             self.create_action_widget(i, action, indent=indents[i])
 
+        # PERF-02: Single handler per action frame (1 bind vs 7 previously).
+        # Uses widget-to-index map for child widget click propagation.
+        self._widget_index_map = {}
+        for i, w in enumerate(self.action_widgets):
+            self._widget_index_map[id(w)] = i
+            for child in w.winfo_children():
+                self._widget_index_map[id(child)] = i
+                for grandchild in child.winfo_children():
+                    self._widget_index_map[id(grandchild)] = i
+
+        def _on_action_click(event):
+            # Walk up widget tree to find action frame index
+            widget = event.widget
+            for _ in range(5):  # Max depth 5
+                idx = self._widget_index_map.get(id(widget), -1)
+                if idx >= 0:
+                    if idx != getattr(self, 'selected_index', -1):
+                        self.selected_index = idx
+                        self.update_list_display()
+                    return
+                widget = widget.master
+                if widget is None:
+                    break
+
+        for w in self.action_widgets:
+            w.bind("<Button-1>", _on_action_click)
+            for child in w.winfo_children():
+                child.bind("<Button-1>", _on_action_click)
+                for grandchild in child.winfo_children():
+                    grandchild.bind("<Button-1>", _on_action_click)
+
     def create_action_widget(self, index, action_data, indent=0):
         t = action_data["type"]
         is_selected = index == getattr(self, "selected_index", -1)
@@ -764,18 +904,11 @@ class TabsMixin:
         f = ctk.CTkFrame(self.scroll_actions, fg_color=base_col, corner_radius=8, border_width=border_width, border_color=border_col)
         f.pack(fill="x", pady=2, padx=(base_padx + indent_px, base_padx))
         self.action_widgets.append(f)
-
-        # Click Handler
-        def on_click(event):
-            self.selected_index = index
-            self.update_list_display()
-
-        f.bind("<Button-1>", on_click)
+        # PERF-02: Click handler is set at parent level via _widget_index_map (no per-widget bindings)
 
         # --- Left: Index Badge ---
         f_left = ctk.CTkFrame(f, fg_color="transparent", width=35)
         f_left.pack(side="left", padx=(5, 2), pady=1)
-        f_left.bind("<Button-1>", on_click)
 
         # Pill/Circle for Index
         idx_bg = COLOR_ACCENT if is_selected else "#334155"
@@ -785,31 +918,13 @@ class TabsMixin:
 
         lbl_idx = ctk.CTkLabel(f_idx, text=f"{index+1}", font=("Inter", 9, "bold"), text_color="white")
         lbl_idx.place(relx=0.5, rely=0.5, anchor="center")
-        lbl_idx.bind("<Button-1>", on_click)
-        f_idx.bind("<Button-1>", on_click)
 
         # --- Middle: Content ---
         f_content = ctk.CTkFrame(f, fg_color="transparent")
         f_content.pack(side="left", fill="both", expand=True, padx=10, pady=1)
-        f_content.bind("<Button-1>", on_click)
 
-        # Title Map
-        title_map = {
-            "click": "Mouse Click",
-            "text": "Type Text",
-            "hotkey": "Press Key",
-            "wait": "Delay",
-            "image_search": "Find Image",
-            "color_search": "Find Color",
-            "multi_color_check": "Multi-Color",
-            "ocr_search": "OCR Read",
-            "logic_if": "IF (ถ้า...เป็นจริง)",
-            "logic_jump": "GOTO (กระโดดไปที่)",
-            "logic_else": "ELSE (ถ้าไม่จริงทำส่วนนี้)",
-            "logic_label": "จุดอ้างอิง (Label)",
-            "var_set": "Set Variable",
-            "var_math": "Calculate",
-        }
+        # PERF-01: title_map moved to class level to avoid re-creation per widget
+        title_map = _ACTION_TITLE_MAP
 
         # Description Logic
         desc = ""
@@ -830,7 +945,7 @@ class TabsMixin:
             if action_data.get("region"):
                 desc += " [Region]"
         elif t == "image_search":
-            import os
+            # os already imported at module top-level
 
             fname = os.path.basename(action_data["path"])
             if len(fname) > 25:
@@ -868,12 +983,10 @@ class TabsMixin:
         # Title Label
         lbl_title = ctk.CTkLabel(f_content, text=title_map.get(t, "Action"), font=("Inter", 12, "bold"), text_color=COLOR_ACCENT, anchor="w")
         lbl_title.pack(side="left")
-        lbl_title.bind("<Button-1>", on_click)
 
         # Detail Label
         lbl_desc = ctk.CTkLabel(f_content, text=desc, font=("Inter", 11), text_color=detail_col, anchor="w")
         lbl_desc.pack(side="left", padx=10)
-        lbl_desc.bind("<Button-1>", on_click)
 
         # --- Right: Badges ---
         badges = []
@@ -885,7 +998,6 @@ class TabsMixin:
         if badges:
             f_right = ctk.CTkFrame(f, fg_color="transparent")
             f_right.pack(side="right", padx=10)
-            f_right.bind("<Button-1>", on_click)
 
             for txt, col in badges:
                 if col:

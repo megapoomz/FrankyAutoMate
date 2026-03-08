@@ -11,12 +11,12 @@ import numpy as np
 import cv2
 import mss
 import pyautogui
-import functools
 
 import pyperclip
 import win32gui
 import win32con
 import win32api
+import win32process
 
 try:
     import pytesseract
@@ -25,26 +25,81 @@ except ImportError:
 
 from typing import Dict, Any, Optional
 from utils.win32_input import send_input_click, send_input_move, send_input_text
+from core.constants import (
+    WAIT_MODE_TIMEOUT, IMAGE_CACHE_MAX_SIZE, IMAGE_CACHE_EVICT_COUNT,
+    EMERGENCY_CORNER_PX, EMERGENCY_CORNER_HOLD, FOCUS_DELAY_DEFAULT,
+    FOCUS_DELAY_STANDALONE,
+    HUMAN_MOVE_MAX_STEPS,
+    BG_ACTIVATION_SETTLE, BG_HOVER_SETTLE, BG_CLICK_HOLD_MIN, BG_CLICK_HOLD_MAX,
+    PRE_CLICK_SETTLE, CLIPBOARD_SETTLE, PASTE_SETTLE, TYPE_FINISH_SETTLE,
+    HOTKEY_INTER_KEY, HOTKEY_HOLD_DELAY, HOTKEY_PRE_DELAY,
+)
 
-# SEC-6: Keep failsafe disabled by default for automation compatibility,
+# Keep failsafe disabled by default for automation compatibility,
 # but wrap pyautogui calls to handle FailSafeException gracefully
+# pyautogui.FAILSAFE is disabled because automation may click near corners.
+# Instead, we implement our own corner-based emergency stop inside bg_runner.
 pyautogui.FAILSAFE = False
 pyautogui.PAUSE = 0
 
+# Removed module-level cached_imread LRU cache.
+# Image caching is now consolidated into instance-level self.image_cache
+# (managed by _cached_imread and _get_gray_template with eviction).
 
-@functools.lru_cache(maxsize=128)
-def cached_imread(path: str) -> Optional[np.ndarray]:
-    """LRU cached template image loader to prevent disk I/O bot-neck during high-freq loops"""
-    try:
-        return cv2.imread(path)
-    except Exception:
-        return None
+# --- Class-level constants (avoid recreating per call) ---
+_VK_MAP = {
+    # Modifier keys
+    "ctrl": 0x11, "control": 0x11, "lctrl": 0x11, "rctrl": 0x11,
+    "alt": 0x12, "menu": 0x12, "lalt": 0x12, "ralt": 0x12,
+    "shift": 0x10, "lshift": 0x10, "rshift": 0x10,
+    "win": 0x5B, "lwin": 0x5B, "rwin": 0x5C,
+    # Navigation / editing
+    "enter": 0x0D, "return": 0x0D, "tab": 0x09, "backspace": 0x08,
+    "delete": 0x2E, "esc": 0x1B, "escape": 0x1B, "space": 0x20,
+    "insert": 0x2D, "home": 0x24, "end": 0x23,
+    "pgup": 0x21, "pageup": 0x21, "page_up": 0x21,
+    "pgdn": 0x22, "pagedown": 0x22, "page_down": 0x22,
+    # Arrow keys
+    "up": 0x26, "down": 0x28, "left": 0x25, "right": 0x27,
+    # Function keys
+    "f1": 0x70, "f2": 0x71, "f3": 0x72, "f4": 0x73, "f5": 0x74,
+    "f6": 0x75, "f7": 0x76, "f8": 0x77, "f9": 0x78, "f10": 0x79,
+    "f11": 0x7A, "f12": 0x7B,
+    # Misc
+    "capslock": 0x14, "numlock": 0x90, "scrolllock": 0x91,
+    "printscreen": 0x2C, "prtsc": 0x2C, "pause": 0x13,
+}
 
+_SCAN_MAP = {
+    0x11: 0x1D, 0x12: 0x38, 0x10: 0x2A,  # Ctrl, Alt, Shift
+    0x0D: 0x1C, 0x09: 0x0F, 0x08: 0x0E,  # Enter, Tab, Backspace
+    0x2E: 0x53, 0x1B: 0x01, 0x20: 0x39,  # Delete, Esc, Space
+    0x2D: 0x52, 0x24: 0x47, 0x23: 0x4F,  # Insert, Home, End
+    0x21: 0x49, 0x22: 0x51,  # PgUp, PgDn
+    0x26: 0x48, 0x28: 0x50, 0x25: 0x4B, 0x27: 0x4D,  # Arrows
+}
+
+_MODIFIER_SET = frozenset({
+    "ctrl", "control", "lctrl", "rctrl",
+    "alt", "menu", "lalt", "ralt",
+    "shift", "lshift", "rshift",
+    "win", "lwin", "rwin",
+})
+
+_PYAUTOGUI_NAME_FIX = {
+    "control": "ctrl", "return": "enter",
+    "esc": "escape", "pgup": "pageup", "pgdn": "pagedown",
+    "page_up": "pageup", "page_down": "pagedown", "prtsc": "printscreen",
+}
+
+# Pre-configure ChildWindowFromPointEx (HIGH-01: avoid per-call ctypes setup)
+_ChildWindowFromPointEx = ctypes.windll.user32.ChildWindowFromPointEx
+_ChildWindowFromPointEx.argtypes = [ctypes.wintypes.HWND, ctypes.wintypes.POINT, ctypes.c_uint]
+_ChildWindowFromPointEx.restype = ctypes.wintypes.HWND
 
 class EngineMixin:
     """Handles automation execution, background runner, and single action logic"""
 
-    # --- Thread-Safe UI Helpers ---
     def safe_update_ui(self, widget_name: str, **kwargs):
         """Schedule UI updates on the main thread to prevent crashes"""
 
@@ -65,25 +120,26 @@ class EngineMixin:
 
     def run_automation(self) -> None:
         if self.is_running:
-            # Step Mode: If paused in step mode, advance to next step
             if self.is_paused and self.var_step_mode.get():
                 self.is_paused = False
                 self.next_step.set()
                 return
-            # Normal Mode: STOP immediately
             self.stop_automation()
             return
 
         self.save_current_to_preset()
-        self.auto_save_presets()
         try:
             loops = int(self.entry_loop.get())
         except (ValueError, TypeError):
             loops = 1
         self.is_running = True
         self.safe_update_ui("btn_run", text="หยุด (STOP)", fg_color="#c0392b")
-        self.stealth_on_run_start()  # Apply stealth settings
-        self.show_running_overlay()  # Show overlay warning
+        self.stealth_on_run_start()
+        try:
+            from utils.win32_input import refresh_screen_metrics
+            refresh_screen_metrics()
+        except Exception:
+            pass
         self.execution_thread = threading.Thread(target=self.bg_runner, args=(loops,))
         self.execution_thread.daemon = True
         self.execution_thread.start()
@@ -91,9 +147,9 @@ class EngineMixin:
     def stop_automation(self) -> None:
         self.is_running = False
         self.is_paused = False
-        self.next_step.set()  # Release if waiting
-        self.stealth_on_run_stop()  # Restore window
-        self.hide_running_overlay()  # Hide overlay
+        self.next_step.set()
+        self.last_child_hwnd = None
+        self.stealth_on_run_stop()
         self.safe_update_ui("btn_run", text="เริ่มทำงาน (START)", fg_color="#27ae60")
         self.safe_update_ui("lbl_status", text="[STOP] กำลังสั่งหยุดทำงาน...", text_color="#e67e22")
 
@@ -104,15 +160,32 @@ class EngineMixin:
         self.log_message("=== เริ่มทำงานอัตโนมัติ ===")
         self.perf_metrics["start_time"] = time.perf_counter()
         self.perf_metrics["actions_exec"] = []
-        # INCMP-1: Reset variables at run start
+        
         with self.variable_lock:
             self.variables.clear()
-        # Initialize mss instance in the worker thread (GDI handles are thread-local)
         try:
             self.sct = mss.mss()
         except Exception:
             self.sct = None
+        _corner_start = None
+        _CORNER_THRESHOLD = EMERGENCY_CORNER_PX
+        _CORNER_HOLD_TIME = EMERGENCY_CORNER_HOLD
+
         while self.is_running:
+            try:
+                mx, my = win32api.GetCursorPos()  # Faster than pyautogui.position()
+                if mx <= _CORNER_THRESHOLD and my <= _CORNER_THRESHOLD:
+                    if _corner_start is None:
+                        _corner_start = time.perf_counter()
+                    elif time.perf_counter() - _corner_start >= _CORNER_HOLD_TIME:
+                        self.log_message("[EMERGENCY STOP] เมาส์ค้างที่มุมซ้ายบน → หยุดฉุกเฉิน", "#ef4444")
+                        self.is_running = False
+                        break
+                else:
+                    _corner_start = None
+            except Exception:
+                _corner_start = None
+
             if loops > 0 and count >= loops:
                 break
             count += 1
@@ -120,7 +193,7 @@ class EngineMixin:
             self.log_message(f"--- {loop_msg} ---")
 
             i = 0
-            # BUG-2: Deep copy to prevent mutation from UI thread
+            # Deep copy ONCE before loop to avoid per-cycle cost
             with self.actions_lock:
                 run_actions = copy.deepcopy(self.actions)
             # Rebuild label index cache each loop for sync safety
@@ -135,19 +208,9 @@ class EngineMixin:
 
                 # --- STEP START: High Frequency Window Context Check ---
                 # 1. Dynamic Following (If enabled)
-                if getattr(self, "var_follow_window", None) and self.var_follow_window.get():
-                    fw = win32gui.GetForegroundWindow()
-                    if fw and fw != self.target_hwnd and win32gui.IsWindowVisible(fw):
-                        try:
-                            title = win32gui.GetWindowText(fw)
-                            if title and title != self.original_title and "Franky" not in title:
-                                self.target_hwnd = fw
-                                self.target_title = title
-                                self.safe_update_ui("lbl_target", text=f"เป้าหมาย (Auto): {self.target_title}")
-                        except Exception:
-                            pass
+                self._try_follow_window()
                 # INST-4: Validate target_hwnd is still valid (not recycled)
-                elif self.target_hwnd:
+                if not (getattr(self, "var_follow_window", None) and self.var_follow_window.get()) and self.target_hwnd:
                     if hasattr(self, "_validate_target_hwnd"):
                         self._validate_target_hwnd()
 
@@ -156,16 +219,8 @@ class EngineMixin:
                 action_mode = run_actions[i].get("mode", "normal") if i < num_actions else "normal"
                 click_mode = run_actions[i].get("click_mode", "normal") if i < num_actions else "normal"
                 is_bg_action = action_mode == "background" or click_mode == "background"
-                if self.target_hwnd and win32gui.IsWindow(self.target_hwnd) and not is_bg_action:
-                    try:
-                        if win32gui.GetForegroundWindow() != self.target_hwnd:
-                            # Use Alt-key trick but with minimal delay during steps
-                            win32api.keybd_event(18, 0, 0, 0)
-                            win32gui.SetForegroundWindow(self.target_hwnd)
-                            win32api.keybd_event(18, 0, 2, 0)
-                            time.sleep(0.05)  # Brief focus wait
-                    except Exception:
-                        pass
+                if not is_bg_action:
+                    self._ensure_target_focus(delay=FOCUS_DELAY_DEFAULT)
                 # --- END STEP CONTEXT ---
 
                 action = run_actions[i]
@@ -186,16 +241,7 @@ class EngineMixin:
                     self.safe_update_ui("btn_run", text="[STOP] หยุด (STOP)", fg_color="#c0392b")
 
                     # Recover focus to target window if using foreground methods
-                    if self.target_hwnd and win32gui.IsWindow(self.target_hwnd):
-                        try:
-                            if win32gui.GetForegroundWindow() != self.target_hwnd:
-                                win32api.keybd_event(18, 0, 0, 0)
-                                win32gui.SetForegroundWindow(self.target_hwnd)
-                                win32api.keybd_event(18, 0, 2, 0)
-                                win32gui.BringWindowToTop(self.target_hwnd)
-                                time.sleep(0.3)
-                        except Exception:
-                            pass
+                    self._ensure_target_focus(delay=0.3, bring_to_top=True)
 
                 if not self.is_running:
                     break
@@ -219,18 +265,20 @@ class EngineMixin:
                 i += 1
 
                 # Delay between steps
-                if i < len(self.actions) and not self.var_step_mode.get():
+                # BUG-A3: Use run_actions (snapshot) instead of self.actions (live)
+                if i < num_actions and not self.var_step_mode.get():
                     time.sleep(0.005 + self.speed_delay)
 
         self.is_running = False
-        # Release mss GDI handle to prevent resource leak
-        if getattr(self, "sct", None) is not None:
-            try:
-                self.sct.close()
-            except Exception:
-                pass
-            self.sct = None  # type: ignore
-        self.after(0, self.hide_running_overlay)  # Thread-safe overlay hide
+        # Release mss GDI handle to prevent resource leak (HIGH-04: only bg_runner thread closes sct)
+        # R4-02: Use BaseException-safe finally to handle KeyboardInterrupt/SystemExit
+        try:
+            sct_local = getattr(self, "sct", None)
+            self.sct = None  # Clear reference first to prevent race with on_app_close
+            if sct_local is not None:
+                sct_local.close()
+        except BaseException:
+            pass
         duration = time.perf_counter() - self.perf_metrics.get("start_time", time.perf_counter())
         self.highlight_action(-1)
         self.safe_update_ui("btn_run", text="เริ่มทำงาน (START)", fg_color="#27ae60")
@@ -285,7 +333,11 @@ class EngineMixin:
             if self.var_debug_mode.get():
                 self.log_message(f"  [TIME] {t}: {elapsed:.0f}ms", "#7f8c8d", level=logging.DEBUG)
 
-            self.safe_update_ui("lbl_status", text=f"รัน {t}: {elapsed:.0f}ms", text_color="#3498db")
+            # Debounce status updates to prevent flooding Tkinter event queue
+            now = time.perf_counter()
+            if (now - self._last_status_update) > 0.1:
+                self.safe_update_ui("lbl_status", text=f"รัน {t}: {elapsed:.0f}ms", text_color="#3498db")
+                self._last_status_update = now
 
             # Universal stop_after check for all action types
             if action.get("stop_after", False) and self.is_running:
@@ -299,7 +351,7 @@ class EngineMixin:
 
     def _human_move(self, tx: float, ty: float) -> None:
         """Move mouse in a human-like curve using Bezier points (uses SendInput for speed)"""
-        start_x, start_y = pyautogui.position()
+        start_x, start_y = win32api.GetCursorPos()  # Faster than pyautogui.position()
         dist = math.hypot(tx - start_x, ty - start_y)
         if dist < 20:
             send_input_move(int(tx), int(ty))
@@ -309,8 +361,8 @@ class EngineMixin:
         cp1_y = start_y + (ty - start_y) * random.uniform(0.1, 0.4) + random.randint(-50, 50)
         cp2_x = start_x + (tx - start_x) * random.uniform(0.6, 0.9) + random.randint(-50, 50)
         cp2_y = start_y + (ty - start_y) * random.uniform(0.6, 0.9) + random.randint(-50, 50)
-        # PERF-5: Cap max steps at 80 to prevent slow moves on 4K displays
-        steps = int(min(80, max(10, dist / random.uniform(15, 25))))
+        # Cap max steps at 80 to prevent slow moves on 4K displays
+        steps = int(min(HUMAN_MOVE_MAX_STEPS, max(10, dist / random.uniform(15, 25))))
 
         for i in range(steps + 1):
             t = i / steps
@@ -347,7 +399,9 @@ class EngineMixin:
         # Always convert to absolute for consistency
         final_x, final_y = self._get_abs_coords(target_x, target_y, is_rel)
 
-        self.log_message(f"[CLICK] คลิก {button} ที่ {target_x:.1f},{target_y:.1f} ({mode})")
+        # Log actual screen coordinates (after jitter + absolute conversion)
+        dry_prefix = "[DRY RUN] " if self.var_dry_run.get() else ""
+        self.log_message(f"{dry_prefix}[CLICK] คลิก {button} ที่ {final_x},{final_y} ({mode})")
 
         self.perform_click(final_x, final_y, button, mode)
 
@@ -363,10 +417,7 @@ class EngineMixin:
 
         # Background Mode Logic
         if mode == "background":
-            target = getattr(self, "last_child_hwnd", self.target_hwnd)
-            if not target or not win32gui.IsWindow(target):
-                # Fallback if window handle is invalid
-                target = self.target_hwnd
+            target = self._get_bg_target()
 
             if target:
                 for char in c:
@@ -378,20 +429,14 @@ class EngineMixin:
                 return
 
         # Normal/Foreground Logic
-        if self.target_hwnd and win32gui.IsWindow(self.target_hwnd):
-            # Always try to focus before typing if possible
-            try:
-                if win32gui.GetForegroundWindow() != self.target_hwnd:
-                    win32gui.SetForegroundWindow(self.target_hwnd)
-                    time.sleep(0.2)
-            except Exception:
-                pass
+        # Normal/Foreground Logic — use shared focus helper
+        self._ensure_target_focus(delay=0.2)
 
         # Execute typing using the most robust method available
         if self.var_stealth_sendinput.get():
             send_input_text(c, delay=0.01)
         else:
-            # POT-5: Use try-finally to ensure clipboard is always restored
+            # Use try-finally to ensure clipboard is always restored
             old_clip = None
             try:
                 try:
@@ -399,9 +444,9 @@ class EngineMixin:
                 except Exception:
                     pass
                 pyperclip.copy(c)
-                time.sleep(0.03)
+                time.sleep(CLIPBOARD_SETTLE)
                 pyautogui.hotkey("ctrl", "v")
-                time.sleep(0.05)
+                time.sleep(PASTE_SETTLE)
             except Exception:
                 # Fallback: SendInput character by character
                 send_input_text(c, delay=0.01)
@@ -412,7 +457,128 @@ class EngineMixin:
                         pyperclip.copy(old_clip)
                     except Exception:
                         pass
-        time.sleep(0.03)
+        time.sleep(TYPE_FINISH_SETTLE)  # Let clipboard settle after typing
+
+    @staticmethod
+    def _make_key_lparam(scan, repeat=1, extended=False, prev_state=False, transition=False):
+        """Build Win32 lParam for key messages (WM_KEYDOWN/UP/SYSKEYDOWN/UP)."""
+        lp = repeat & 0xFFFF
+        lp |= (scan & 0xFF) << 16
+        if extended:
+            lp |= 1 << 24
+        if prev_state:
+            lp |= 1 << 30
+        if transition:
+            lp |= 1 << 31
+        return lp
+
+    def _hotkey_background(self, key: str, target) -> None:
+        """Send hotkey combination via PostMessage to background window."""
+        scan_map = _SCAN_MAP
+        vk_map = _VK_MAP
+        modifier_set = _MODIFIER_SET
+        keys_clean = key.lower().replace(" ", "")
+
+        # SEC-04: Warn if target may be elevated (UIPI blocks PostMessage to higher-privilege windows)
+        try:
+            from utils.win32_input import is_admin
+            if not is_admin():
+                _, target_pid = win32process.GetWindowThreadProcessId(target)
+                # Try to open process — if access is denied, it's likely elevated
+                import ctypes
+                h = ctypes.windll.kernel32.OpenProcess(0x0400, False, target_pid)  # PROCESS_QUERY_INFORMATION
+                if h:
+                    ctypes.windll.kernel32.CloseHandle(h)
+                else:
+                    self.log_message(
+                        f"[WARN] เป้าหมาย PID {target_pid} อาจรันด้วยสิทธิ์ Admin — PostMessage อาจถูก block โดย UIPI",
+                        "#f59e0b", level=logging.WARNING
+                    )
+        except Exception:
+            pass
+
+        # Special Handler: CTRL+A (Select All) — use EM_SETSEL for reliability
+        if keys_clean in ["ctrl+a", "^a"]:
+            try:
+                win32gui.PostMessage(target, win32con.WM_SETFOCUS, 0, 0)
+                time.sleep(0.02)
+                ctypes.windll.user32.SendMessageW(target, 0x00B1, 0, -1)
+                win32gui.PostMessage(target, win32con.WM_KEYDOWN, 0x11, 0x001D0001)
+                time.sleep(0.01)
+                win32gui.PostMessage(target, win32con.WM_KEYDOWN, 0x41, 0x001E0001)
+                time.sleep(0.01)
+                win32gui.PostMessage(target, win32con.WM_CHAR, 1, 0x001E0001)
+                time.sleep(0.01)
+                win32gui.PostMessage(target, win32con.WM_KEYUP, 0x41, 0xC01E0001)
+                win32gui.PostMessage(target, win32con.WM_KEYUP, 0x11, 0xC01D0001)
+                return
+            except Exception:
+                pass
+
+        # Parse key combination
+        parts = [k.strip().lower() for k in key.split("+")]
+        modifiers = [p for p in parts if p in modifier_set]
+        main_keys = [p for p in parts if p not in modifier_set]
+
+        has_alt = any(m in ("alt", "menu", "lalt", "ralt") for m in modifiers)
+        has_ctrl = any(m in ("ctrl", "control", "lctrl", "rctrl") for m in modifiers)
+        has_shift = any(m in ("shift", "lshift", "rshift") for m in modifiers)
+
+        try:
+            # 1. Press modifier keys down
+            if has_ctrl:
+                sc = scan_map.get(0x11, 0x1D)
+                win32gui.PostMessage(target, win32con.WM_KEYDOWN, 0x11, self._make_key_lparam(sc))
+                time.sleep(0.01)
+            if has_shift:
+                sc = scan_map.get(0x10, 0x2A)
+                win32gui.PostMessage(target, win32con.WM_KEYDOWN, 0x10, self._make_key_lparam(sc))
+                time.sleep(0.01)
+            if has_alt:
+                sc = scan_map.get(0x12, 0x38)
+                win32gui.PostMessage(target, win32con.WM_SYSKEYDOWN, 0x12, self._make_key_lparam(sc))
+                time.sleep(0.01)
+
+            # 2. Press and release main keys
+            key_down_msg = win32con.WM_SYSKEYDOWN if has_alt else win32con.WM_KEYDOWN
+            key_up_msg = win32con.WM_SYSKEYUP if has_alt else win32con.WM_KEYUP
+
+            for mk in main_keys:
+                vk = vk_map.get(mk)
+                if vk is None:
+                    if len(mk) == 1:
+                        vk_result = win32api.VkKeyScan(mk)
+                        if vk_result == -1 or vk_result == 0xFFFF:
+                            self.log_message(f"[BG KEY] ไม่รู้จักปุ่ม: '{mk}' (keyboard layout อาจไม่รองรับ)", "#f59e0b")
+                            continue
+                        vk = vk_result & 0xFF
+                sc = scan_map.get(vk, 0)
+                lp_down = self._make_key_lparam(sc)
+                if has_alt:
+                    lp_down |= 1 << 29
+
+                win32gui.PostMessage(target, key_down_msg, vk, lp_down)
+                time.sleep(0.02)
+
+                lp_up = self._make_key_lparam(sc, prev_state=True, transition=True)
+                if has_alt:
+                    lp_up |= 1 << 29
+                win32gui.PostMessage(target, key_up_msg, vk, lp_up)
+                time.sleep(0.01)
+
+            # 3. Release modifier keys (reverse order)
+            if has_alt:
+                sc = scan_map.get(0x12, 0x38)
+                win32gui.PostMessage(target, win32con.WM_KEYUP, 0x12, self._make_key_lparam(sc, prev_state=True, transition=True))
+            if has_shift:
+                sc = scan_map.get(0x10, 0x2A)
+                win32gui.PostMessage(target, win32con.WM_KEYUP, 0x10, self._make_key_lparam(sc, prev_state=True, transition=True))
+            if has_ctrl:
+                sc = scan_map.get(0x11, 0x1D)
+                win32gui.PostMessage(target, win32con.WM_KEYUP, 0x11, self._make_key_lparam(sc, prev_state=True, transition=True))
+
+        except Exception as e:
+            self.log_message(f"[BG KEY ERR] {e}", "red", level=logging.WARNING)
 
     def _execute_hotkey(self, action: Dict[str, Any]) -> None:
         key = action["content"]
@@ -423,228 +589,28 @@ class EngineMixin:
         if dry:
             return
 
-        # --- Comprehensive VK Code Map (shared by BG and normal fallback) ---
-        vk_map = {
-            # Modifier keys
-            "ctrl": 0x11,
-            "control": 0x11,
-            "lctrl": 0x11,
-            "rctrl": 0x11,
-            "alt": 0x12,
-            "menu": 0x12,
-            "lalt": 0x12,
-            "ralt": 0x12,
-            "shift": 0x10,
-            "lshift": 0x10,
-            "rshift": 0x10,
-            "win": 0x5B,
-            "lwin": 0x5B,
-            "rwin": 0x5C,
-            # Navigation / editing
-            "enter": 0x0D,
-            "return": 0x0D,
-            "tab": 0x09,
-            "backspace": 0x08,
-            "delete": 0x2E,
-            "esc": 0x1B,
-            "escape": 0x1B,
-            "space": 0x20,
-            "insert": 0x2D,
-            "home": 0x24,
-            "end": 0x23,
-            "pgup": 0x21,
-            "pageup": 0x21,
-            "page_up": 0x21,
-            "pgdn": 0x22,
-            "pagedown": 0x22,
-            "page_down": 0x22,
-            # Arrow keys
-            "up": 0x26,
-            "down": 0x28,
-            "left": 0x25,
-            "right": 0x27,
-            # Function keys
-            "f1": 0x70,
-            "f2": 0x71,
-            "f3": 0x72,
-            "f4": 0x73,
-            "f5": 0x74,
-            "f6": 0x75,
-            "f7": 0x76,
-            "f8": 0x77,
-            "f9": 0x78,
-            "f10": 0x79,
-            "f11": 0x7A,
-            "f12": 0x7B,
-            # Misc
-            "capslock": 0x14,
-            "numlock": 0x90,
-            "scrolllock": 0x91,
-            "printscreen": 0x2C,
-            "prtsc": 0x2C,
-            "pause": 0x13,
-        }
-        # Scan code map for proper lParam construction
-        scan_map = {
-            0x11: 0x1D,
-            0x12: 0x38,
-            0x10: 0x2A,  # Ctrl, Alt, Shift
-            0x0D: 0x1C,
-            0x09: 0x0F,
-            0x08: 0x0E,  # Enter, Tab, Backspace
-            0x2E: 0x53,
-            0x1B: 0x01,
-            0x20: 0x39,  # Delete, Esc, Space
-            0x2D: 0x52,
-            0x24: 0x47,
-            0x23: 0x4F,  # Insert, Home, End
-            0x21: 0x49,
-            0x22: 0x51,  # PgUp, PgDn
-            0x26: 0x48,
-            0x28: 0x50,
-            0x25: 0x4B,
-            0x27: 0x4D,  # Arrows
-        }
-        modifier_set = {"ctrl", "control", "lctrl", "rctrl", "alt", "menu", "lalt", "ralt", "shift", "lshift", "rshift", "win", "lwin", "rwin"}
-
-        # Background Hotkey Logic
+        # Background Mode — delegated to sub-method
         if mode == "background":
-            target = getattr(self, "last_child_hwnd", self.target_hwnd)
-            # POT-4: Validate cached child handle is still valid
-            if target and not win32gui.IsWindow(target):
-                target = self.target_hwnd
-            if not target:
-                target = self.target_hwnd
+            target = self._get_bg_target()
             if target:
-                keys_clean = key.lower().replace(" ", "")
-
-                # Special Handler: CTRL+A (Select All) — use EM_SETSEL for reliability
-                if keys_clean in ["ctrl+a", "^a"]:
-                    try:
-                        win32gui.PostMessage(target, win32con.WM_SETFOCUS, 0, 0)
-                        time.sleep(0.02)
-                        ctypes.windll.user32.SendMessageW(target, 0x00B1, 0, -1)
-                        # Reinforcement with key messages
-                        win32gui.PostMessage(target, win32con.WM_KEYDOWN, 0x11, 0x001D0001)
-                        time.sleep(0.01)
-                        win32gui.PostMessage(target, win32con.WM_KEYDOWN, 0x41, 0x001E0001)
-                        time.sleep(0.01)
-                        win32gui.PostMessage(target, win32con.WM_CHAR, 1, 0x001E0001)
-                        time.sleep(0.01)
-                        win32gui.PostMessage(target, win32con.WM_KEYUP, 0x41, 0xC01E0001)
-                        win32gui.PostMessage(target, win32con.WM_KEYUP, 0x11, 0xC01D0001)
-                        return
-                    except Exception:
-                        pass
-
-                # Parse key combination into parts
-                parts = [k.strip().lower() for k in key.split("+")]
-                modifiers = [p for p in parts if p in modifier_set]
-                main_keys = [p for p in parts if p not in modifier_set]
-
-                has_alt = any(m in ("alt", "menu", "lalt", "ralt") for m in modifiers)
-                has_ctrl = any(m in ("ctrl", "control", "lctrl", "rctrl") for m in modifiers)
-                has_shift = any(m in ("shift", "lshift", "rshift") for m in modifiers)
-
-                # Build lParam helper
-                def make_lparam(scan, repeat=1, extended=False, prev_state=False, transition=False):
-                    lp = repeat & 0xFFFF
-                    lp |= (scan & 0xFF) << 16
-                    if extended:
-                        lp |= 1 << 24
-                    if prev_state:
-                        lp |= 1 << 30
-                    if transition:
-                        lp |= 1 << 31
-                    return lp
-
-                try:
-                    # For Alt combos, use WM_SYSKEYDOWN/WM_SYSKEYUP
-                    # This is how Windows processes Alt+key combinations
-
-                    # 1. Press modifier keys down
-                    if has_ctrl:
-                        sc = scan_map.get(0x11, 0x1D)
-                        win32gui.PostMessage(target, win32con.WM_KEYDOWN, 0x11, make_lparam(sc))
-                        time.sleep(0.01)
-                    if has_shift:
-                        sc = scan_map.get(0x10, 0x2A)
-                        win32gui.PostMessage(target, win32con.WM_KEYDOWN, 0x10, make_lparam(sc))
-                        time.sleep(0.01)
-                    if has_alt:
-                        sc = scan_map.get(0x12, 0x38)
-                        win32gui.PostMessage(target, win32con.WM_SYSKEYDOWN, 0x12, make_lparam(sc))
-                        time.sleep(0.01)
-
-                    # 2. Press and release main keys
-                    key_down_msg = win32con.WM_SYSKEYDOWN if has_alt else win32con.WM_KEYDOWN
-                    key_up_msg = win32con.WM_SYSKEYUP if has_alt else win32con.WM_KEYUP
-
-                    for mk in main_keys:
-                        vk = vk_map.get(mk)
-                        if vk is None:
-                            # Single character: use VkKeyScan to get VK code
-                            if len(mk) == 1:
-                                vk = win32api.VkKeyScan(mk) & 0xFF
-                            else:
-                                continue
-                        sc = scan_map.get(vk, 0)
-                        lp_down = make_lparam(sc)
-                        if has_alt:
-                            lp_down |= 1 << 29  # Context code: ALT is held
-
-                        win32gui.PostMessage(target, key_down_msg, vk, lp_down)
-                        time.sleep(0.02)
-
-                        lp_up = make_lparam(sc, prev_state=True, transition=True)
-                        if has_alt:
-                            lp_up |= 1 << 29
-                        win32gui.PostMessage(target, key_up_msg, vk, lp_up)
-                        time.sleep(0.01)
-
-                    # 3. Release modifier keys (reverse order)
-                    if has_alt:
-                        sc = scan_map.get(0x12, 0x38)
-                        win32gui.PostMessage(target, win32con.WM_KEYUP, 0x12, make_lparam(sc, prev_state=True, transition=True))
-                    if has_shift:
-                        sc = scan_map.get(0x10, 0x2A)
-                        win32gui.PostMessage(target, win32con.WM_KEYUP, 0x10, make_lparam(sc, prev_state=True, transition=True))
-                    if has_ctrl:
-                        sc = scan_map.get(0x11, 0x1D)
-                        win32gui.PostMessage(target, win32con.WM_KEYUP, 0x11, make_lparam(sc, prev_state=True, transition=True))
-
-                except Exception as e:
-                    self.log_message(f"[BG KEY ERR] {e}", "red", level=logging.WARNING)
+                self._hotkey_background(key, target)
             return
 
         # Normal Mode
-        time.sleep(0.03)
+        time.sleep(HOTKEY_PRE_DELAY)
         keys = [k.strip().lower() for k in key.split("+")]
-        # Normalize key names for pyautogui compatibility
-        name_fix = {
-            "control": "ctrl",
-            "ctlr": "ctrl",
-            "return": "enter",
-            "esc": "escape",
-            "pgup": "pageup",
-            "pgdn": "pagedown",
-            "page_up": "pageup",
-            "page_down": "pagedown",
-            "prtsc": "printscreen",
-        }
-        keys = [name_fix.get(k, k) for k in keys]
-        
-        # Re-implement hotkey with delays to ensure games/apps catch the input
+        keys = [_PYAUTOGUI_NAME_FIX.get(k, k) for k in keys]
+
         valid_keys = []
         for k in keys:
             try:
                 pyautogui.keyDown(k)
                 valid_keys.append(k)
-                time.sleep(0.04)
+                time.sleep(HOTKEY_INTER_KEY)
             except Exception as e:
                 self.log_message(f"[KEY] Error pressing {k}: {e}", "red")
 
-        time.sleep(0.05)
+        time.sleep(HOTKEY_HOLD_DELAY)
 
         for k in reversed(valid_keys):
             try:
@@ -653,34 +619,47 @@ class EngineMixin:
             except Exception:
                 pass
 
-        time.sleep(0.03)
+        time.sleep(HOTKEY_PRE_DELAY)
 
     def _execute_wait(self, action: Dict[str, Any]) -> None:
-        secs = float(action["seconds"])
+        try:
+            secs = float(action["seconds"])
+        except (ValueError, TypeError, KeyError):
+            self.log_message("[WAIT] ค่ารอไม่ถูกต้อง ใช้ค่าเริ่มต้น 1.0s", "#f59e0b")
+            secs = 1.0
         if self.var_stealth_timing.get():
             variance = self.var_stealth_timing_val.get()
-            # BUG-5: Clamp factor to prevent zero/negative wait
+            # Clamp factor to prevent zero/negative wait
             factor = max(0.1, 1.0 + random.uniform(-variance, variance))
             secs *= factor
-            self.log_message(f"[WAIT] รอ: {secs:.2f} วินาที (สุ่มจาก {action['seconds']}s)", level=logging.DEBUG)
+            self.log_message(f"[WAIT] รอ: {secs:.2f} วินาที (สุ่มจาก {action.get('seconds', '?')}s)", level=logging.DEBUG)
         else:
             self.log_message(f"[WAIT] รอ: {secs:.2f} วินาที")
 
         wait_time = max(0, secs)
-        start_wait = time.perf_counter()
-        # Active wait loop to allow for immediate stop
-        while self.is_running and (time.perf_counter() - start_wait) < wait_time:
-            time.sleep(0.01)
+        # MED-04: Use Event-based wait instead of busy-polling (reduces CPU overhead)
+        # next_step event is set by stop_automation(), so this will exit cleanly on stop
+        if wait_time > 0 and self.is_running:
+            # Split long waits into chunks so emergency stop can still trigger
+            remaining = wait_time
+            while remaining > 0 and self.is_running:
+                chunk = min(remaining, 0.5)  # Check every 500ms at most
+                time.sleep(chunk)
+                remaining -= chunk
 
     def _execute_image_search(self, action: Dict[str, Any]) -> None:
         path, mode = action["path"], action.get("mode", "wait")
         do_click, off_x, off_y = action.get("do_click", True), action.get("off_x", 0), action.get("off_y", 0)
         region = action.get("region")
         confidence = action.get("confidence", 0.75)
-        max_wait_time = action.get("max_wait_time", 120)  # POT-1: Default 120s timeout for wait mode
+        max_wait_time = action.get("max_wait_time", WAIT_MODE_TIMEOUT)
 
         m_txt = "รอจนกว่าจะเจอ" if mode == "wait" else "เช็คครั้งเดียว"
         self.log_message(f"[FIND] ค้นหารูป: {os.path.basename(path)} ({m_txt}, grayscale)")
+
+        # Show debug overlay for region if enabled
+        if region:
+            self.show_search_region(region[0], region[1], region[2], region[3])
 
         found_loc = None
         max_val = 0  # Initialize to prevent UnboundLocalError on fallback path
@@ -690,20 +669,14 @@ class EngineMixin:
             self.log_message(f"[ERROR] ไม่พบไฟล์รูปภาพ: {path}", "red")
             return
 
-        # Fetch cached template
-        template_bgr = cached_imread(path)
+        # Fetch cached template 
+        template_bgr = self._cached_imread(path)
         if template_bgr is None:
             self.log_message(f"[ERROR] อ่านไฟล์รูปภาพไม่ได้: {path}", "red")
             return
 
-        # Pre-convert template to grayscale (cached separately in instance to avoid contaminating global BGR cache)
-        gray_key = (path, "gray")
-        if gray_key not in self.image_cache:
-            if len(template_bgr.shape) == 3:
-                self.image_cache[gray_key] = cv2.cvtColor(template_bgr, cv2.COLOR_BGR2GRAY)
-            else:
-                self.image_cache[gray_key] = template_bgr
-        template = self.image_cache[gray_key]
+        # Use shared helper for grayscale conversion with caching
+        template = self._get_gray_template(path, template_bgr)
 
         wait_start = time.perf_counter()
         while self.is_running:
@@ -728,25 +701,15 @@ class EngineMixin:
 
             if found_loc or mode != "wait":
                 break
-            # POT-1: Timeout check for wait mode
+            # Timeout check for wait mode
             if time.perf_counter() - wait_start > max_wait_time:
                 self.log_message(f"[TIMEOUT] หมดเวลารอรูป ({max_wait_time}s)", "#f59e0b")
                 break
             time.sleep(0.05)
 
         if found_loc:
-            # 1. Fresh Window Context Sync (If following)
-            if getattr(self, "var_follow_window", None) and self.var_follow_window.get():
-                fw = win32gui.GetForegroundWindow()
-                if fw and fw != self.target_hwnd and win32gui.IsWindowVisible(fw):
-                    try:
-                        title = win32gui.GetWindowText(fw)
-                        if title and title != self.original_title and "Franky" not in title:
-                            self.target_hwnd = fw
-                            self.target_title = title
-                            self.safe_update_ui("lbl_target", text=f"เป้าหมาย (Auto): {self.target_title}")
-                    except Exception:
-                        pass
+            # Use shared follow-window helper
+            self._try_follow_window()
 
             time.sleep(0.03)
 
@@ -765,8 +728,8 @@ class EngineMixin:
                 else:
                     self.perform_click(tx, ty, button=btn, mode=cm)
 
-            if mode == "break":
-                self.is_running = False
+            # "break" mode is consolidated into stop_after in execute_one
+            # No separate is_running=False here — handled by universal stop_after check
         else:
             self.log_message("[NOT FOUND] ไม่พบรูปภาพ")
 
@@ -774,8 +737,13 @@ class EngineMixin:
         tx, ty, rgb = action["x"], action["y"], action["rgb"]
         tol, mode = action.get("tolerance", 10), action.get("mode", "wait")
         do_click, region = action.get("do_click", True), action.get("region")
-        max_wait_time = action.get("max_wait_time", 120)  # POT-2: Default 120s timeout
+        max_wait_time = action.get("max_wait_time", WAIT_MODE_TIMEOUT)
         self.log_message(f"[COLOR] ค้นหาสี {rgb} ({mode})")
+
+        # Show debug overlay for region if enabled
+        if region:
+            self.show_search_region(region[0], region[1], region[2], region[3])
+
         match_found, last_pos = False, (tx, ty)
 
         # Cast rgb to int16 to prevent uint8 underflow in subtraction
@@ -786,6 +754,9 @@ class EngineMixin:
             try:
                 img_np = self.get_cached_screenshot(region=region)
                 if not region:
+                    # Bounds check to prevent IndexError on resolution changes
+                    if ty < 0 or ty >= img_np.shape[0] or tx < 0 or tx >= img_np.shape[1]:
+                        return False
                     pixel = img_np[ty, tx].astype(np.int16)
                     return np.all(np.abs(pixel - rgb_arr) <= tol)
                 else:
@@ -806,7 +777,7 @@ class EngineMixin:
                 break
             if mode != "wait":
                 break
-            # POT-2: Timeout check for wait mode
+            # Timeout check for wait mode
             if time.perf_counter() - wait_start > max_wait_time:
                 self.log_message(f"[TIMEOUT] หมดเวลารอสี ({max_wait_time}s)", "#f59e0b")
                 break
@@ -826,8 +797,8 @@ class EngineMixin:
                     self.do_background_click(last_pos[0], last_pos[1], btn)
                 else:
                     self.perform_click(last_pos[0], last_pos[1], button=btn, mode=cm)
-            if mode == "break":
-                self.is_running = False
+            # "break" mode consolidated into stop_after in execute_one
+            # No separate is_running=False here — handled by universal stop_after check
         else:
             self.log_message("[NOT FOUND] ไม่พบสี")
 
@@ -835,6 +806,7 @@ class EngineMixin:
         points, logic = action.get("points", []), action.get("logic", "AND")
         mode, do_click = action.get("mode", "once"), action.get("do_click", False)
         click_x, click_y = action.get("click_x", 0), action.get("click_y", 0)
+        max_wait_time = action.get("max_wait_time", WAIT_MODE_TIMEOUT)
         if not points:
             return
         self.log_message(f"[MULTI-COLOR] เช็คหลายสี: {len(points)} จุด (โหมด {logic})")
@@ -842,26 +814,44 @@ class EngineMixin:
         def check_all_points():
             try:
                 ss = self.get_cached_screenshot()
-                results = []
+                # Vectorized multi-color point checking
+                coords = []
+                rgbs = []
+                tols = []
                 for pt in points:
-                    px, py, pt_rgb, pt_tol = int(pt["x"]), int(pt["y"]), pt["rgb"], pt.get("tolerance", 10)
+                    px, py = int(pt["x"]), int(pt["y"])
                     if 0 <= py < ss.shape[0] and 0 <= px < ss.shape[1]:
-                        pixel_val = ss[py, px][:3].astype(np.int16)
-                        rgb_val = np.array(pt_rgb, dtype=np.int16)
-                        match = np.all(np.abs(pixel_val - rgb_val) <= pt_tol)
-                        results.append(match)
+                        coords.append((py, px))
+                        rgbs.append(pt["rgb"])
+                        tols.append(pt.get("tolerance", 10))
                     else:
-                        results.append(False)
-                return all(results) if logic == "AND" else any(results)
+                        # Out of bounds point — treat as False
+                        if logic == "AND":
+                            return False  # AND requires all to match
+                        # For OR, just skip this point
+                        continue
+                if not coords:
+                    return False
+                # Batch pixel extraction
+                pixels = np.array([ss[y, x][:3] for y, x in coords], dtype=np.int16)
+                rgb_arr = np.array(rgbs, dtype=np.int16)
+                tol_arr = np.array(tols, dtype=np.int16).reshape(-1, 1)
+                matches = np.all(np.abs(pixels - rgb_arr) <= tol_arr, axis=1)
+                return bool(np.all(matches)) if logic == "AND" else bool(np.any(matches))
             except Exception:
                 return False
 
         match_found = False
+        wait_start = time.perf_counter()
         while self.is_running:
             if check_all_points():
                 match_found = True
                 break
             if mode != "wait":
+                break
+            # BUG-A1: Timeout check for wait mode
+            if time.perf_counter() - wait_start > max_wait_time:
+                self.log_message(f"[TIMEOUT] หมดเวลารอ Multi-Color ({max_wait_time}s)", "#f59e0b")
                 break
             time.sleep(0.05)
 
@@ -892,7 +882,7 @@ class EngineMixin:
             win32gui.PostMessage(parent, win32con.WM_MOUSEACTIVATE, parent, win32api.MAKELONG(win32con.HTCLIENT, d))
             win32gui.PostMessage(h, win32con.WM_ACTIVATE, win32con.WA_ACTIVE, 0)
             win32gui.PostMessage(h, win32con.WM_SETFOCUS, 0, 0)
-            time.sleep(0.03)  # Let activation settle
+            time.sleep(BG_ACTIVATION_SETTLE)  # Let activation settle
         except Exception:
             pass
 
@@ -911,7 +901,7 @@ class EngineMixin:
                 nc_d = win32con.WM_NCRBUTTONDOWN if is_right else win32con.WM_NCLBUTTONDOWN
                 nc_u = win32con.WM_NCRBUTTONUP if is_right else win32con.WM_NCLBUTTONUP
                 win32gui.PostMessage(h, nc_d, hit_test, lp_screen)
-                time.sleep(random.uniform(0.12, 0.18))
+                time.sleep(random.uniform(BG_CLICK_HOLD_MIN, BG_CLICK_HOLD_MAX))
                 win32gui.PostMessage(h, nc_u, hit_test, lp_screen)
             return
 
@@ -929,67 +919,82 @@ class EngineMixin:
             # Full message sequence: SetCursor → MouseMove → (delay) → ButtonDown → (hold) → ButtonUp
             win32gui.PostMessage(h, win32con.WM_SETCURSOR, h, win32api.MAKELONG(win32con.HTCLIENT, d))
             win32gui.PostMessage(h, win32con.WM_MOUSEMOVE, 0, lp)
-            time.sleep(0.03)  # Give app time to process hover state
+            time.sleep(BG_HOVER_SETTLE)  # Give app time to process hover state
             win32gui.PostMessage(h, d, w, lp)
 
             # Hold duration (slightly longer for reliability)
-            time.sleep(random.uniform(0.08, 0.14))
+            time.sleep(random.uniform(BG_CLICK_HOLD_MIN, BG_CLICK_HOLD_MAX))
             win32gui.PostMessage(h, u, 0, lp)
+
+    def _bg_resolve_target(self, x: float, y: float):
+        """Find the correct child window handle for background click at (x, y).
+        Returns (target_hwnd, used_child_lookup)."""
+        target_hwnd = getattr(self, "target_hwnd", None)
+        # HIGH-01: Use module-level _ChildWindowFromPointEx (configured once at import)
+
+        used_child_lookup = False
+        if target_hwnd and win32gui.IsWindow(target_hwnd):
+            try:
+                client_pt = win32gui.ScreenToClient(target_hwnd, (int(x), int(y)))
+                real_hwnd = _ChildWindowFromPointEx(target_hwnd, ctypes.wintypes.POINT(client_pt[0], client_pt[1]), 0x0001)
+                if not real_hwnd or real_hwnd == target_hwnd:
+                    real_hwnd = target_hwnd
+                used_child_lookup = True
+            except Exception:
+                real_hwnd = target_hwnd
+                used_child_lookup = True
+        else:
+            real_hwnd = win32gui.WindowFromPoint((int(x), int(y)))
+
+        # Descendant safety check — only needed for Global mode (WindowFromPoint)
+        if target_hwnd and not used_child_lookup:
+            is_descendant = False
+            curr = real_hwnd
+            depth = 0
+            while curr and depth < 50:
+                if curr == target_hwnd:
+                    is_descendant = True
+                    break
+                curr = win32gui.GetParent(curr)
+                depth += 1
+            target = real_hwnd if is_descendant else target_hwnd
+        else:
+            target = real_hwnd
+
+        return target
+
+    def _bg_hit_test(self, target, target_hwnd, lParam_screen):
+        """Perform hit-testing to detect non-client area clicks (title bar, system buttons).
+        Returns (is_nc, hit_test)."""
+        is_nc = False
+        hit_test = win32con.HTCLIENT
+
+        if target == target_hwnd or not target_hwnd:
+            SMTO_ABORTIFHUNG = 0x0002
+            result = ctypes.wintypes.DWORD()
+            ret = ctypes.windll.user32.SendMessageTimeoutW(
+                target, win32con.WM_NCHITTEST, 0, lParam_screen, SMTO_ABORTIFHUNG, 100, ctypes.byref(result)
+            )
+            hit_test = result.value if ret else win32con.HTCLIENT
+            is_nc = hit_test != win32con.HTCLIENT and hit_test != 0
+
+        return is_nc, hit_test
 
     def do_background_click(self, x: float, y: float, button: str = "left") -> None:
         """Refined background click: Finds specific child windows for better compatibility"""
         target_hwnd = getattr(self, "target_hwnd", None)
         try:
-            # Setup ctypes properly for ChildWindowFromPointEx (64-bit safe)
-            _ChildWindowFromPointEx = ctypes.windll.user32.ChildWindowFromPointEx
-            _ChildWindowFromPointEx.argtypes = [ctypes.wintypes.HWND, ctypes.wintypes.POINT, ctypes.c_uint]
-            _ChildWindowFromPointEx.restype = ctypes.wintypes.HWND
-
-            # 1. Identify the specific sub-window (control) at this screen coordinate
-            used_child_lookup = False
-            if target_hwnd and win32gui.IsWindow(target_hwnd):
-                try:
-                    # ChildWindowFromPointEx finds child directly within target —
-                    # accurate even when target is occluded by other windows
-                    client_pt = win32gui.ScreenToClient(target_hwnd, (int(x), int(y)))
-                    real_hwnd = _ChildWindowFromPointEx(target_hwnd, ctypes.wintypes.POINT(client_pt[0], client_pt[1]), 0x0001)
-                    if not real_hwnd or real_hwnd == target_hwnd:
-                        real_hwnd = target_hwnd
-                    used_child_lookup = True
-                except Exception:
-                    real_hwnd = target_hwnd
-                    used_child_lookup = True
-            else:
-                # Global mode: find whatever is at the screen point
-                real_hwnd = win32gui.WindowFromPoint((int(x), int(y)))
-
-            # Descendant safety check — only needed for Global mode (WindowFromPoint)
-            # ChildWindowFromPointEx already guarantees the result is a child of target_hwnd
-            if target_hwnd and not used_child_lookup:
-                is_descendant = False
-                curr = real_hwnd
-                depth = 0
-                while curr and depth < 50:
-                    if curr == target_hwnd:
-                        is_descendant = True
-                        break
-                    curr = win32gui.GetParent(curr)
-                    depth += 1
-                target = real_hwnd if is_descendant else target_hwnd
-            else:
-                target = real_hwnd
-
-            # Store for subsequent typing actions
+            # 1. Resolve target child window
+            target = self._bg_resolve_target(x, y)
             self.last_child_hwnd = target
 
-            # Debug: log the target handle and class for troubleshooting
             try:
                 cls = win32gui.GetClassName(target)
                 self.log_message(f"[BG] HWND:{target} Class:{cls} @ ({int(x)},{int(y)})", level=logging.DEBUG)
             except Exception:
                 pass
 
-            # 2. Coordinate conversion to the specific target HWND
+            # 2. Coordinate conversion
             try:
                 cx, cy = win32gui.ScreenToClient(target, (int(x), int(y)))
             except Exception:
@@ -997,22 +1002,10 @@ class EngineMixin:
                 cx, cy = int(x) - rect[0], int(y) - rect[1]
 
             lParam = win32api.MAKELONG(cx, cy)
-
-            # 3. Hit-Testing — only needed when clicking the parent window itself
-            #    (child controls are always HTCLIENT, skip the blocking call)
-            is_nc = False
-            hit_test = win32con.HTCLIENT
             lParam_screen = win32api.MAKELONG(int(x), int(y))
 
-            if target == target_hwnd or not target_hwnd:
-                # Clicking the main window — check for title bar / system buttons
-                SMTO_ABORTIFHUNG = 0x0002
-                result = ctypes.wintypes.DWORD()
-                ret = ctypes.windll.user32.SendMessageTimeoutW(
-                    target, win32con.WM_NCHITTEST, 0, lParam_screen, SMTO_ABORTIFHUNG, 100, ctypes.byref(result)
-                )
-                hit_test = result.value if ret else win32con.HTCLIENT
-                is_nc = hit_test != win32con.HTCLIENT and hit_test != 0
+            # 3. Hit-test for NC area
+            is_nc, hit_test = self._bg_hit_test(target, target_hwnd, lParam_screen)
 
             # 4. Execute Click
             is_right = button == "right"
@@ -1020,43 +1013,25 @@ class EngineMixin:
             btn_up = win32con.WM_RBUTTONUP if is_right else win32con.WM_LBUTTONUP
             wparam = win32con.MK_RBUTTON if is_right else win32con.MK_LBUTTON
 
-            if button == "double":
-                btn_dbl = win32con.WM_LBUTTONDBLCLK  # Double-click is always left-button
+            click_args = dict(
+                h=target, d=btn_down, u=btn_up, w=wparam, lp=lParam,
+                is_nc=is_nc, hit_test=hit_test, lp_screen=lParam_screen,
+                is_right=is_right, button=button,
+            )
 
-                self._bg_send_click(
-                    target,
-                    btn_down,
-                    btn_up,
-                    wparam,
-                    lParam,
-                    is_nc=is_nc,
-                    hit_test=hit_test,
-                    lp_screen=lParam_screen,
-                    is_right=is_right,
-                    button=button,
-                )
+            if button == "double":
+                self._bg_send_click(**click_args)
                 time.sleep(0.04)
 
                 # Re-send cursor context before DBLCLK
                 win32gui.PostMessage(target, win32con.WM_SETCURSOR, target, win32api.MAKELONG(win32con.HTCLIENT, btn_down))
                 win32gui.PostMessage(target, win32con.WM_MOUSEMOVE, 0, lParam)
                 time.sleep(0.01)
-                win32gui.PostMessage(target, btn_dbl, wparam, lParam)
+                win32gui.PostMessage(target, win32con.WM_LBUTTONDBLCLK, wparam, lParam)
                 time.sleep(random.uniform(0.04, 0.07))
                 win32gui.PostMessage(target, btn_up, 0, lParam)
             else:
-                self._bg_send_click(
-                    target,
-                    btn_down,
-                    btn_up,
-                    wparam,
-                    lParam,
-                    is_nc=is_nc,
-                    hit_test=hit_test,
-                    lp_screen=lParam_screen,
-                    is_right=is_right,
-                    button=button,
-                )
+                self._bg_send_click(**click_args)
 
         except Exception as e:
             self.log_message(f"[BG CLICK ERR] {e}", "red", level=logging.WARNING)
@@ -1082,16 +1057,11 @@ class EngineMixin:
         if self.var_stealth_move.get():
             self._human_move(x, y)
 
-        # --- Normal Mode Focus Recovery ---
-        if mode == "normal" and self.target_hwnd and win32gui.IsWindow(self.target_hwnd):
-            try:
-                if win32gui.GetForegroundWindow() != self.target_hwnd:
-                    win32api.keybd_event(18, 0, 0, 0)
-                    win32gui.SetForegroundWindow(self.target_hwnd)
-                    win32api.keybd_event(18, 0, 2, 0)
-                    time.sleep(0.08)  # Focus stabilization
-            except Exception:
-                pass
+        # Skip focus here — bg_runner already calls _ensure_target_focus
+        # before each action. Only call it when perform_click is used standalone
+        # (e.g. from image_search/color_search click handlers)
+        if mode == "normal" and not self.is_running:
+            self._ensure_target_focus(delay=FOCUS_DELAY_STANDALONE)
 
         if self.var_stealth_sendinput.get():
             if mode != "background":  # Explicitly ensure we don't mix up
@@ -1110,55 +1080,83 @@ class EngineMixin:
                     time.sleep(random.uniform(0.05, 0.15))
                     pyautogui.mouseUp(button="left")
             else:
+                # Pre-click stabilization for apps that process focus asynchronously
+                time.sleep(PRE_CLICK_SETTLE)
                 if button == "double":
                     pyautogui.doubleClick(x, y)
                 else:
                     pyautogui.click(x, y, button=button)
 
     def get_cached_screenshot(self, region: Optional[tuple] = None, as_gray: bool = False) -> np.ndarray:
-        current_time = time.perf_counter()
-        cache_valid = self.screenshot_cache is not None and current_time - self.screenshot_cache_time < self.screenshot_cache_ttl
+        # Protect screenshot cache from concurrent access
+        with self._screenshot_lock:
+            current_time = time.perf_counter()
+            cache_valid = self.screenshot_cache is not None and current_time - self.screenshot_cache_time < self.screenshot_cache_ttl
 
-        if not cache_valid:
-            # Always capture full-screen and cache it (slicing is cheaper than separate grabs)
-            if not self.sct:
+            if not cache_valid:
+                # Always capture full-screen and cache it (slicing is cheaper than separate grabs)
+                if not self.sct:
+                    # mss is not thread-safe — only init from bg thread
+                    if threading.current_thread() is threading.main_thread():
+                        logging.warning("get_cached_screenshot called from main thread, using pyautogui fallback")
+                        self.screenshot_cache = np.array(pyautogui.screenshot())
+                        self.screenshot_cache_time = current_time
+                        ss = self.screenshot_cache
+                        if as_gray:
+                            self._screenshot_gray_cache = cv2.cvtColor(ss, cv2.COLOR_RGB2GRAY)
+                            ss = self._screenshot_gray_cache
+                        if region:
+                            rx, ry, rw, rh = region
+                            if ry + rh <= ss.shape[0] and rx + rw <= ss.shape[1]:
+                                ss = ss[ry:ry+rh, rx:rx+rw]
+                        return ss
+                    try:
+                        self.sct = mss.mss()
+                    except Exception as e:
+                        # Log mss init failure with context
+                        self.log_message(f"[WARN] mss init failed: {e}, using pyautogui fallback", level=logging.WARNING)
+                        self.sct = None
+                # R4-03: Guard against sct being None after fallback path above
+                if self.sct is None:
+                    self.screenshot_cache = np.array(pyautogui.screenshot())
+                    self._screenshot_gray_cache = None
+                    self.screenshot_cache_time = current_time
+                    ss = self.screenshot_cache
+                    if as_gray:
+                        self._screenshot_gray_cache = cv2.cvtColor(ss, cv2.COLOR_RGB2GRAY)
+                        ss = self._screenshot_gray_cache
+                    if region:
+                        rx, ry, rw, rh = region
+                        if ry + rh <= ss.shape[0] and rx + rw <= ss.shape[1]:
+                            ss = ss[ry:ry+rh, rx:rx+rw]
+                    return ss
                 try:
-                    self.sct = mss.mss()
+                    sct_img = self.sct.grab(self.sct.monitors[0])
+                    raw = np.array(sct_img)
+                    self.screenshot_cache = raw[:, :, :3][:, :, ::-1]
+                    self._screenshot_gray_cache = cv2.cvtColor(raw, cv2.COLOR_BGRA2GRAY)
                 except Exception:
-                    self.sct = None
-            try:
-                sct_img = self.sct.grab(self.sct.monitors[0])
-                # PERF-3: Store as RGB for color operations
-                raw = np.array(sct_img)
-                self.screenshot_cache = raw[:, :, :3][:, :, ::-1]  # BGRA -> BGR -> RGB (no copy, just view)
-                # Also prepare grayscale directly from BGRA for faster gray path
-                self._screenshot_gray_cache_raw = cv2.cvtColor(raw, cv2.COLOR_BGRA2GRAY)
-            except Exception:
-                self.log_message("[WARN] mss failed, falling back to pyautogui (slower)", level=logging.WARNING)
-                self.screenshot_cache = np.array(pyautogui.screenshot())
-            self.screenshot_cache_time = current_time
-            self._screenshot_gray_cache = None  # Invalidate grayscale cache
+                    self.log_message("[WARN] mss failed, falling back to pyautogui (slower)", level=logging.WARNING)
+                    self.screenshot_cache = np.array(pyautogui.screenshot())
+                    self._screenshot_gray_cache = None  # Clear stale gray cache
+                self.screenshot_cache_time = current_time
 
-        ss = self.screenshot_cache
+            ss = self.screenshot_cache
 
-        # Grayscale conversion (cached — only computed once per frame)
-        if as_gray:
-            # PERF-3: Use pre-computed grayscale from BGRA if available
-            gray = getattr(self, "_screenshot_gray_cache_raw", None)
-            if gray is not None:
-                ss = gray
-            elif self._screenshot_gray_cache is None:
-                self._screenshot_gray_cache = cv2.cvtColor(ss, cv2.COLOR_RGB2GRAY)
-                ss = self._screenshot_gray_cache
-            else:
-                ss = self._screenshot_gray_cache
+            # Simplified grayscale path
+            if as_gray:
+                if self._screenshot_gray_cache is not None:
+                    ss = self._screenshot_gray_cache
+                else:
+                    self._screenshot_gray_cache = cv2.cvtColor(ss, cv2.COLOR_RGB2GRAY)
+                    ss = self._screenshot_gray_cache
 
-        # Region slicing (cheap numpy view, no copy)
-        if region:
-            rx, ry, rw, rh = region
-            if ry + rh <= ss.shape[0] and rx + rw <= ss.shape[1]:
-                return ss[ry : ry + rh, rx : rx + rw]
-        return ss
+            # Region slicing (cheap numpy view, no copy)
+            if region:
+                rx, ry, rw, rh = region
+                if ry + rh <= ss.shape[0] and rx + rw <= ss.shape[1]:
+                    return ss[ry : ry + rh, rx : rx + rw]
+            return ss
 
     def _execute_logic_if(self, action: Dict[str, Any], current_index: int, run_actions: Optional[list] = None) -> Optional[int]:
         condition = action.get("condition", "image_found")
@@ -1171,21 +1169,22 @@ class EngineMixin:
             path = action.get("path")
             region = action.get("region")
             if path:
-                # Use global lru_cache instead of manual dictionary for raw image
-                raw = cached_imread(path)
-                screen_gray = self.get_cached_screenshot(region=region, as_gray=True)
-
-                # Manual cache just for the grayscale version of the template
-                gray_key = (path, "gray")
-                if gray_key not in self.image_cache:
-                    self.image_cache[gray_key] = cv2.cvtColor(raw, cv2.COLOR_BGR2GRAY) if raw is not None and len(raw.shape) == 3 else raw
-
-                template = self.image_cache[gray_key]
-                if template is not None:
-                    res = cv2.matchTemplate(screen_gray, template, cv2.TM_CCOEFF_NORMED)
-                    _, max_val, _, _ = cv2.minMaxLoc(res)
-                    conf = action.get("confidence", 0.75)
-                    met = max_val >= conf
+                # BUG-A6: Validate image exists and log error if not
+                if not os.path.exists(path):
+                    self.log_message(f"[ERROR] IF condition: ไม่พบไฟล์รูปภาพ: {path}", "red")
+                else:
+                    raw = self._cached_imread(path)
+                    if raw is None:
+                        self.log_message(f"[ERROR] IF condition: อ่านไฟล์รูปภาพไม่ได้: {path}", "red")
+                    else:
+                        screen_gray = self.get_cached_screenshot(region=region, as_gray=True)
+                        # Use shared grayscale conversion helper
+                        template = self._get_gray_template(path, raw)
+                        if template is not None:
+                            res = cv2.matchTemplate(screen_gray, template, cv2.TM_CCOEFF_NORMED)
+                            _, max_val, _, _ = cv2.minMaxLoc(res)
+                            conf = action.get("confidence", 0.75)
+                            met = max_val >= conf
 
         elif condition == "color_match":
             rgb = action.get("rgb")
@@ -1237,7 +1236,7 @@ class EngineMixin:
         cache = getattr(self, "_label_index_cache", None)
         if cache and label_name in cache:
             return cache[label_name]
-        # BUG-3: Fallback uses run_actions (snapshot) instead of self.actions (live)
+        # Fallback uses run_actions (snapshot) instead of self.actions (live)
         search_list = run_actions if run_actions is not None else self.actions
         for idx, act in enumerate(search_list):
             if act["type"] == "logic_label" and act.get("name") == label_name:
@@ -1250,6 +1249,7 @@ class EngineMixin:
         mode = action.get("mode", "wait")
         region = action.get("region")
         do_click = action.get("do_click", True)
+        max_wait_time = action.get("max_wait_time", WAIT_MODE_TIMEOUT)
 
         if pytesseract is None:
             self.log_message("[ERROR] ข้อผิดพลาด: ไม่พบไลบรารี pytesseract กรุณาติดตั้ง 'pip install pytesseract'", "red")
@@ -1273,11 +1273,15 @@ class EngineMixin:
             self._tesseract_path_set = True
 
         self.log_message(f'[OCR] ค้นหาข้อความ: "{target_text}" ({mode})')
-        # PERF-5: Warn if no region set (OCR on full screen is very slow)
+        # Warn if no region set (OCR on full screen is very slow)
         if not region:
             self.log_message("[WARN] OCR ค้นหาทั้งจอ แนะนำให้กำหนดพื้นที่ (Region) เพื่อความเร็วที่ดีขึ้น", "#f59e0b", level=logging.WARNING)
+        elif region:
+            # Show debug overlay for region if enabled
+            self.show_search_region(region[0], region[1], region[2], region[3])
 
         found_loc = None
+        wait_start = time.perf_counter()
         while self.is_running:
             try:
                 # Use cached grayscale screenshot (avoids redundant cv2.cvtColor)
@@ -1298,7 +1302,11 @@ class EngineMixin:
 
             if found_loc or mode != "wait":
                 break
-            time.sleep(1.0)  # PERF-5: Increased from 0.5s — OCR is expensive
+            # BUG-A2: Timeout check for wait mode
+            if time.perf_counter() - wait_start > max_wait_time:
+                self.log_message(f"[TIMEOUT] หมดเวลารอ OCR ({max_wait_time}s)", "#f59e0b")
+                break
+            time.sleep(1.0)  # Increased from 0.5s — OCR is expensive
 
         if found_loc:
             dry = self.var_dry_run.get()
@@ -1365,7 +1373,9 @@ class EngineMixin:
         """If val is a string starting with $, treat it as a variable name"""
         if isinstance(val, str) and val.startswith("$"):
             var_name = val[1:]
-            return self.variables.get(var_name, 0)
+            # TS-A3: Use lock to prevent race condition with _execute_var_set/math
+            with self.variable_lock:
+                return self.variables.get(var_name, 0)
         return val
 
     def _evaluate_expression(self, left: Any, op: str, right: Any) -> bool:
@@ -1378,17 +1388,17 @@ class EngineMixin:
             fl = float(l_val)
             fr = float(r_val)
             if op == "==":
-                return fl == fr
+                return math.isclose(fl, fr, rel_tol=1e-9)  # MED-06: safe float comparison
             if op == "!=":
-                return fl != fr
+                return not math.isclose(fl, fr, rel_tol=1e-9)
             if op == ">":
                 return fl > fr
             if op == "<":
                 return fl < fr
             if op == ">=":
-                return fl >= fr
+                return fl >= fr or math.isclose(fl, fr, rel_tol=1e-9)
             if op == "<=":
-                return fl <= fr
+                return fl <= fr or math.isclose(fl, fr, rel_tol=1e-9)
         except (ValueError, TypeError):
             # Fallback to string comparison
             sl, sr = str(l_val), str(r_val)
@@ -1398,3 +1408,87 @@ class EngineMixin:
                 return sl != sr
             return False
         return False
+
+    # --- Shared Helper Methods ---
+
+    def _get_bg_target(self):
+        """Shared background target validation — returns best valid HWND."""
+        target = getattr(self, "last_child_hwnd", None) or self.target_hwnd
+        # Validate cached child handle is still valid
+        if target and not win32gui.IsWindow(target):
+            target = self.target_hwnd
+        if not target:
+            target = self.target_hwnd
+        return target
+
+    def _cached_imread(self, path: str) -> Optional[np.ndarray]:
+        """Consolidated image cache with eviction policy."""
+        if path in self.image_cache:
+            return self.image_cache[path]
+        try:
+            img = cv2.imread(path)
+            if img is not None:
+                self.image_cache[path] = img
+                self._maybe_evict_cache()
+            return img
+        except Exception:
+            return None
+
+    def _try_follow_window(self):
+        """Shared follow-window logic — updates target to current foreground window."""
+        if not (getattr(self, "var_follow_window", None) and self.var_follow_window.get()):
+            return
+        try:
+            fw = win32gui.GetForegroundWindow()
+            if fw and fw != self.target_hwnd and win32gui.IsWindowVisible(fw):
+                title = win32gui.GetWindowText(fw)
+                if title and title != self.original_title and "Franky" not in title:
+                    self.target_hwnd = fw
+                    self.target_title = title
+                    self.safe_update_ui("lbl_target", text=f"เป้าหมาย (Auto): {self.target_title}")
+        except Exception:
+            pass
+
+    def _ensure_target_focus(self, delay: float = 0.05, bring_to_top: bool = False):
+        """Shared focus recovery — ensures target window is in foreground."""
+        if not self.target_hwnd or not win32gui.IsWindow(self.target_hwnd):
+            return
+        try:
+            fg = win32gui.GetForegroundWindow()
+            if fg != self.target_hwnd:
+                # Use AttachThreadInput instead of fake Alt key press
+                # to avoid injecting unwanted Alt keystroke into target app
+                # HIGH-02: win32process imported at module top-level
+                fg_thread = win32process.GetWindowThreadProcessId(fg)[0]
+                target_thread = win32process.GetWindowThreadProcessId(self.target_hwnd)[0]
+                if fg_thread != target_thread:
+                    ctypes.windll.user32.AttachThreadInput(fg_thread, target_thread, True)
+                try:
+                    win32gui.SetForegroundWindow(self.target_hwnd)
+                except Exception:
+                    pass
+                if fg_thread != target_thread:
+                    ctypes.windll.user32.AttachThreadInput(fg_thread, target_thread, False)
+                if bring_to_top:
+                    win32gui.BringWindowToTop(self.target_hwnd)
+                time.sleep(delay)
+        except Exception:
+            pass
+
+    def _get_gray_template(self, path: str, bgr_img: np.ndarray) -> Optional[np.ndarray]:
+        """Shared grayscale template conversion with instance-level caching."""
+        gray_key = (path, "gray")
+        if gray_key not in self.image_cache:
+            if bgr_img is not None and len(bgr_img.shape) == 3:
+                self.image_cache[gray_key] = cv2.cvtColor(bgr_img, cv2.COLOR_BGR2GRAY)
+            else:
+                self.image_cache[gray_key] = bgr_img
+            self._maybe_evict_cache()
+        return self.image_cache[gray_key]
+
+    def _maybe_evict_cache(self):
+        """OVERLAP-04: Shared cache eviction — removes oldest entries when cache exceeds max size."""
+        if len(self.image_cache) > IMAGE_CACHE_MAX_SIZE:
+            keys_to_remove = list(self.image_cache.keys())[:IMAGE_CACHE_EVICT_COUNT]
+            for k in keys_to_remove:
+                del self.image_cache[k]

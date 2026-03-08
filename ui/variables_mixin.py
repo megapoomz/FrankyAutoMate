@@ -2,7 +2,6 @@ import customtkinter as ctk
 from tkinter import messagebox
 from core.constants import COLOR_INNER, COLOR_ACCENT, COLOR_MUTED, BORDER_COLOR
 
-
 class VariablesMixin:
     """Handles UI and action logic for Variables and Advanced Loops (Phase 3)"""
 
@@ -97,14 +96,18 @@ class VariablesMixin:
         if not name:
             return messagebox.showwarning("เตือน", "กรุณาใส่ชื่อตัวแปร", parent=self)
 
-        # Try to cast to number if it looks like one
-        try:
-            if "." in val:
-                val = float(val)
-            else:
-                val = int(val)
-        except (ValueError, TypeError):
-            pass
+        # INC-A2: Default empty value to 0 to prevent float('') errors later
+        if not val:
+            val = 0
+        elif isinstance(val, str):
+            # Try to cast string to number if it looks like one
+            try:
+                if "." in val:
+                    val = float(val)
+                else:
+                    val = int(val)
+            except (ValueError, TypeError):
+                pass  # Keep as string if it can't be converted
 
         self.add_action_item({"type": "var_set", "name": name, "value": val})
 
@@ -119,15 +122,17 @@ class VariablesMixin:
         op_map = {"บวกเพิ่ม (+)": "add", "ลบออก (-)": "sub", "คูณ (*)": "mul", "หาร (/)": "div"}
         op = op_map.get(op_text, "add")
 
-        # Convert val to number if possible (prevent float() errors during execution)
-        if not val.startswith("$"):
+        # Default empty value to 1 to prevent float('') errors during execution
+        if not val:
+            val = 1
+        elif not val.startswith("$"):
             try:
                 if "." in val:
                     val = float(val)
                 else:
                     val = int(val)
             except (ValueError, TypeError):
-                pass
+                return messagebox.showwarning("เตือน", f"ค่า '{val}' ไม่ใช่ตัวเลขหรือตัวแปร ($)", parent=self)
 
         self.add_action_item({"type": "var_math", "name": name, "op": op, "value": val})
 
@@ -141,8 +146,9 @@ class VariablesMixin:
             return messagebox.showwarning("เตือน", "กรุณาระบุเงื่อนไขและ Label เป้าหมาย", parent=self)
 
         # Auto-prepend $ so _resolve_value treats left as variable name
-        if not left.startswith("$"):
-            left = f"${left}"
+        # WARN-06: Strip all leading $ first to prevent $$ double-prepend
+        left = left.lstrip("$")
+        left = f"${left}"
 
         self.add_action_item(
             {"type": "logic_if", "condition": "var_compare", "left": left, "op": op, "right": right, "target_label": target, "jump_on": "true"}

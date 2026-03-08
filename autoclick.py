@@ -1,16 +1,21 @@
 import sys
 import os
 import threading
+from pathlib import Path
 import logging
+import ctypes
+
+# DPI awareness moved exclusively to main.py to avoid duplicate calls.
+# When running autoclick.py directly (dev mode), main.py should be the entry point.
 
 import customtkinter as ctk
 import win32gui
-import requests
 
 # Core & Utils
 from core.constants import (
     APP_VERSION,
     GITHUB_API_URL,
+    SCREENSHOT_CACHE_TTL,
     COLOR_BG,
     COLOR_CARD,
     COLOR_INNER,
@@ -40,7 +45,6 @@ from ui.tabs_mixin import TabsMixin
 from ui.ui_mixin import UIMixin
 from ui.update_window import UpdateProgressWindow
 
-
 class AutoMationApp(
     ctk.CTk,
     HotkeyMixin,
@@ -55,10 +59,30 @@ class AutoMationApp(
     TabsMixin,
     UIMixin,
 ):
+    """
+    Mixin Dependency Graph
+    ─────────────────────────────────
+    Each mixin uses self.xxx to access attributes defined in other mixins.
+    The dependency flow (→ means "depends on") is:
+
+    EngineMixin    → UIMixin (log_message, safe_update_ui, highlight_action)
+                   → StealthMixin (stealth_on_run_start/stop)
+                   → PickerMixin (implicit: picked coords)
+    ActionMixin    → UIMixin (update_list_display, auto_save_presets)
+    LogicMixin     → UIMixin + ActionMixin (add_action_item, refresh_label_dropdowns)
+    TabsMixin      → ActionMixin + PickerMixin (add_action_item, picks)
+    VisionMixin    → ActionMixin + TabsMixin (add_action_item, tab references)
+    VariablesMixin → ActionMixin (add_action_item)
+    PickerMixin    → UIMixin (lbl_status)
+    PresetMixin    → UIMixin + ActionMixin (UI updates, actions management)
+    HotkeyMixin    → EngineMixin + PresetMixin (run/stop, preset switching)
+    StealthMixin   → ctk.CTk (title, iconify, deiconify)
+
+    Type safety: see core/protocols.py for AppProtocol
+    """
     def __init__(self):
         super().__init__()
 
-        # State Initialization
         self.actions: list[dict] = []
         self.actions_lock = threading.Lock()  # Protects self.actions between UI and bg threads
         self.is_running = False
@@ -74,16 +98,20 @@ class AutoMationApp(
         self.selected_index = -1
         self.show_marker = True
         self.current_img_path = ""
+        self.picked_x_raw = 0
+        self.picked_y_raw = 0
+        self.picked_rel_x = 0
+        self.picked_rel_y = 0
+        self.is_relative = False
+        self._last_status_update = 0.0
         self.current_region = None
         self.current_color_data = None
+        self.last_child_hwnd = None  # Track last child HWND for background actions
 
-        # Thread safety (STAB-2: initialized here to avoid lazy init race)
         self._held_keys_lock = threading.Lock()
 
-        # Track after callbacks for cleanup (STAB-5)
         self._pending_after_ids = []
 
-        # Hotkey & Engine Configuration
         self.toggle_key = "f6"
         self.held_keys = set()
         self.recorded_keys = set()
@@ -92,15 +120,14 @@ class AutoMationApp(
         self.waiting_for_preset_key = None
         self.current_preset_index = 0
 
-        # Perf Metrics
         self.perf_metrics = {"start_time": 0, "actions_exec": []}
         self.screenshot_cache = None
         self.screenshot_cache_time = 0
-        self.screenshot_cache_ttl = 0.25  # 250ms TTL for screen cache (PERF-3: increased from 150ms)
+        self.screenshot_cache_ttl = SCREENSHOT_CACHE_TTL  # Use centralized constant
         self._screenshot_gray_cache = None
+        self._screenshot_lock = threading.Lock()  # Protects screenshot cache across threads
         self.sct = None  # Initialized in bg_runner thread
 
-        # Stealth Vars
         self.var_stealth_move = ctk.BooleanVar(value=False)
         self.var_stealth_jitter = ctk.BooleanVar(value=False)
         self.var_stealth_jitter_radius = ctk.DoubleVar(value=3.0)
@@ -113,23 +140,23 @@ class AutoMationApp(
         self.var_logic_conf = ctk.DoubleVar(value=0.75)
         self.original_title = f"Franky AutoMate v{APP_VERSION}"
 
-        # UI Control Vars
         self.var_dry_run = ctk.BooleanVar(value=False)
         self.var_step_mode = ctk.BooleanVar(value=False)
         self.var_debug_mode = ctk.BooleanVar(value=False)
         self.var_follow_window = ctk.BooleanVar(value=False)
 
-        # Variable System (Phase 3)
         self.variables = {}
-        self.variable_lock = threading.Lock()
+        # Must be RLock (reentrant) because _execute_var_set/math
+        # hold this lock while calling _resolve_value which also acquires it
+        self.variable_lock = threading.RLock()
 
-        # Path for presets
-        appdata_dir = os.path.join(os.getenv("APPDATA", os.getcwd()), "FrankyAutoMate")
+        # Path for presets — Path.home() fallback instead of os.getcwd()
+        _appdata = os.getenv("APPDATA") or str(Path.home())
+        appdata_dir = os.path.join(_appdata, "FrankyAutoMate")
         os.makedirs(appdata_dir, exist_ok=True)
         self.presets_file = os.path.join(appdata_dir, "presets.json")
         self.create_default_preset()
 
-        # Deferred startup
         self.after(100, self.launch_app)
 
     def launch_app(self):
@@ -140,7 +167,6 @@ class AutoMationApp(
         self.deiconify()
         self.lbl_status.configure(text="ระบบพร้อมทำงาน", text_color=COLOR_SUCCESS)
 
-        # Admin check warning on startup
         if not is_admin():
             from tkinter import messagebox
 
@@ -156,31 +182,37 @@ class AutoMationApp(
             )
         # Auto-check for updates after 3 seconds
         self._pending_after_ids.append(self.after(3000, lambda: threading.Thread(target=self.check_for_updates, args=(True,), daemon=True).start()))
-        # Start hotkey listener health-check (INST-3)
+        
         self._start_listener_health_check()
 
     def on_app_close(self):
         """Cleanup resources before closing"""
         if self.is_running:
             self.stop_automation()
-            # Wait for bg thread to finish (max 2 seconds)
             t = getattr(self, "execution_thread", None)
             if t and t.is_alive():
                 t.join(timeout=2)
-        # STAB-5: Cancel all pending after callbacks to prevent TclError
-        for after_id in getattr(self, "_pending_after_ids", []):
+        # Cancel all tracked timers; iterate a copy since cancel may modify list
+        ids_to_cancel = list(getattr(self, "_pending_after_ids", []))
+        for after_id in ids_to_cancel:
             try:
                 self.after_cancel(after_id)
             except Exception:
                 pass
         self._pending_after_ids.clear()
-        # Cancel debounced auto-save
         if hasattr(self, "_auto_save_timer"):
             try:
                 self.after_cancel(self._auto_save_timer)
             except Exception:
                 pass
-        # Note: sct is thread-local (GDI handles), cleaned up by bg_runner itself
+        self.last_child_hwnd = None
+        # HIGH-04: Don't close sct here — bg_runner owns it and handles cleanup.
+        # Just signal stop and let bg_runner's finally block close sct safely.
+        if self.is_running:
+            self.is_running = False
+            # Give bg_runner a moment to stop and clean up sct
+            if hasattr(self, 'execution_thread') and self.execution_thread and self.execution_thread.is_alive():
+                self.execution_thread.join(timeout=1.0)
         if hasattr(self, "listener"):
             try:
                 self.listener.stop()
@@ -189,32 +221,57 @@ class AutoMationApp(
         self.destroy()
 
     def _start_listener_health_check(self):
-        """INST-3: Periodically check if pynput listener is still alive, restart if crashed"""
+        """Periodically check if pynput listener is still alive, restart if crashed."""
 
         def _check():
             listener = getattr(self, "listener", None)
             if listener and not listener.is_alive():
                 logging.warning("Hotkey listener died, restarting...")
-                # STAB-4: Stop old listener before creating a new one
                 try:
                     listener.stop()
                 except Exception:
                     pass
                 self.setup_hotkeys()
+            self._cleanup_pending_afters()
             timer_id = self.after(30000, _check)  # Re-check every 30 seconds
             self._pending_after_ids.append(timer_id)
 
         timer_id = self.after(30000, _check)
         self._pending_after_ids.append(timer_id)
 
+    def _track_after(self, delay_ms, callback, *args):
+        """Wrapper for self.after() that tracks timer IDs for cleanup on close."""
+        timer_id = self.after(delay_ms, callback, *args)
+        self._pending_after_ids.append(timer_id)
+        self._cleanup_pending_afters()
+        return timer_id
+
+    def _cleanup_pending_afters(self):
+        """MED-01: Consolidated cleanup — evict old tracked timer IDs when list grows too large."""
+        if len(self._pending_after_ids) > 100:
+            old_ids = self._pending_after_ids[:-50]
+            for old_id in old_ids:
+                try:
+                    self.after_cancel(old_id)
+                except Exception:
+                    pass
+            self._pending_after_ids = self._pending_after_ids[-50:]
+
+    def _cancel_timer(self, timer_id):
+        """Cancel a specific after timer safely."""
+        if timer_id is not None:
+            try:
+                self.after_cancel(timer_id)
+            except Exception:
+                pass
+
     def _validate_target_hwnd(self):
-        """INST-4: Verify target_hwnd still exists and title matches"""
+        """Verify target_hwnd still exists and title matches."""
         if self.target_hwnd:
             try:
                 if not win32gui.IsWindow(self.target_hwnd):
                     self.target_hwnd = None
                     return False
-                # Check title still roughly matches to detect recycled handles
                 current_title = win32gui.GetWindowText(self.target_hwnd)
                 if self.target_title and self.target_title != "ทั้งหน้าจอ (Global)":
                     if current_title and self.target_title not in current_title and current_title not in self.target_title:
@@ -226,11 +283,22 @@ class AutoMationApp(
                 return False
         return True
 
+    def _add_section_divider(self, parent):
+        """Visual separator between sections in combined tabs"""
+        ctk.CTkFrame(parent, height=2, fg_color=BORDER_COLOR).pack(fill="x", padx=10, pady=15)
+
     def check_for_updates(self, silent=False):
         """Check GitHub Releases for new version. Runs in background thread."""
         try:
-            self.after(0, lambda: self.btn_check_update.configure(text="⏳ กำลังเช็ค...", state="disabled"))
+            def _set_btn(text, state):
+                try:
+                    if hasattr(self, 'btn_check_update') and self.btn_check_update.winfo_exists():
+                        self.btn_check_update.configure(text=text, state=state)
+                except Exception:
+                    pass
+            self.after(0, lambda: _set_btn("⏳ กำลังเช็ค...", "disabled"))
 
+            import requests
             headers = {"User-Agent": "FrankyAutoMate-Updater"}
             resp = requests.get(GITHUB_API_URL, headers=headers, timeout=10)
             resp.raise_for_status()
@@ -239,17 +307,26 @@ class AutoMationApp(
             latest_tag = data.get("tag_name", "").lstrip("vV")
             changelog = data.get("body", "ไม่มีรายละเอียด")
 
-            # Find .zip asset download URL
             download_url = None
             for asset in data.get("assets", []):
                 if asset["name"].endswith(".zip"):
-                    download_url = asset["browser_download_url"]
+                    url = asset["browser_download_url"]
+                    
+                    if url.startswith("https://"):
+                        download_url = url
+                    else:
+                        self.log_message(f"[SEC] Rejected non-HTTPS download URL: {url}", "#f59e0b")
                     break
 
-            # Semver comparison
             def parse_ver(v):
+                import re
                 parts = v.split(".")
-                return tuple(int(x) for x in parts if x.isdigit())
+                result = []
+                for x in parts:
+                    digits = re.sub(r'[^0-9]', '', x)
+                    if digits:
+                        result.append(int(digits))
+                return tuple(result) if result else (0,)
 
             current = parse_ver(APP_VERSION)
             latest = parse_ver(latest_tag)
@@ -279,25 +356,43 @@ class AutoMationApp(
                 err_msg = str(e)
                 self.after(0, lambda err=err_msg: self.lbl_status.configure(text=f"❌ เช็คอัปเดตไม่ได้: {err}", text_color=COLOR_DANGER))
         finally:
-            self.after(0, lambda: self.btn_check_update.configure(text="🔄 เช็คอัปเดต", state="normal"))
+            self.after(0, lambda: _set_btn("🔄 เช็คอัปเดต", "normal"))
 
     def preload_images(self):
-        """Preload image templates from all preset actions into cache"""
+        """Preload image templates from all preset actions into cache (with size limit)"""
+        # Concurrency guard — prevent overlapping preload threads
+        if getattr(self, '_preload_running', False):
+            return
+        self._preload_running = True
         try:
             import cv2
+            from core.constants import IMAGE_CACHE_MAX_SIZE
 
-            for preset in self.presets:
-                for action in preset.get("actions", []):
+            with self.actions_lock:
+                presets_snapshot = [p.get("actions", []) for p in self.presets]
+
+            loaded = 0
+            for actions in presets_snapshot:
+                for action in actions:
+                    
+                    if len(self.image_cache) >= IMAGE_CACHE_MAX_SIZE:
+                        return
                     path = action.get("path")
                     if path and path not in self.image_cache:
                         try:
                             img = cv2.imread(path)
                             if img is not None:
+                                # HIGH-03: Use thread-safe pattern — dict assignment is atomic in CPython
+                                # but check-then-set is not. Using simple assignment is safe enough
+                                # since worst case is a redundant cv2.imread, not data corruption.
                                 self.image_cache[path] = img
+                                loaded += 1
                         except Exception:
                             pass
-        except Exception:
-            pass
+        except Exception as e:
+            logging.warning(f"preload_images error: {e}")
+        finally:
+            self._preload_running = False
 
     def setup_ui(self):
         self.title(self.original_title)
@@ -348,9 +443,12 @@ class AutoMationApp(
         f_right = ctk.CTkFrame(self, fg_color=COLOR_CARD, corner_radius=20, border_width=1, border_color=BORDER_COLOR)
         f_right.grid(row=0, column=1, sticky="nsew", padx=(0, 20), pady=20)
 
-        # Make the internal content scrollable
+        # TARGET + PRESETS: Pinned at bottom of right panel (always visible)
+        self.setup_bottom_panels(f_right)
+
+        # SCROLLABLE TABS: Fill remaining space above the pinned panels
         self.scroll_right = ctk.CTkScrollableFrame(f_right, fg_color="transparent", corner_radius=0)
-        self.scroll_right.pack(fill="both", expand=True, padx=5, pady=5)
+        self.scroll_right.pack(fill="both", expand=True, padx=5, pady=(5, 0))
 
         # Tabs for actions (Inside scrollable)
         self.tabs = ctk.CTkTabview(
@@ -364,30 +462,44 @@ class AutoMationApp(
         self.tabs._segmented_button.configure(font=("Inter", 11, "bold"))
         self.tabs.pack(fill="x", padx=5, pady=5)
 
-        self.tab_click = self.tabs.add("Mouse")
-        self.tab_type = self.tabs.add("Type")
-        self.tab_image = self.tabs.add("Image")
-        self.tab_color = self.tabs.add("Color")
-        self.tab_wait = self.tabs.add("Wait")
-        self.tab_vars = self.tabs.add("Vars")
-        self.tab_vision = self.tabs.add("Vision")
-        self.tab_logic = self.tabs.add("Logic")
-        self.tab_stealth = self.tabs.add("Stealth")
-        self.tab_log = self.tabs.add("Log")
+        # === 5 Combined Tabs (simplified from 10) ===
+        tab_action = self.tabs.add("คลิก/ค้นหา")
+        tab_input = self.tabs.add("พิมพ์/รอ")
+        tab_logic_main = self.tabs.add("เงื่อนไข")
+        self.tab_stealth = self.tabs.add("ซ่อนตัว")
+        self.tab_log = self.tabs.add("บันทึก")
 
+        self.tab_click = tab_action
+        self.tab_image = tab_action
+        self.tab_color = tab_action
+        self.tab_vision = tab_action
+        self.tab_type = tab_input
+        self.tab_wait = tab_input
+        self.tab_vars = tab_logic_main
+        self.tab_logic = tab_logic_main
+
+        # --- 🎯 Action Tab: Mouse + Image + Color + OCR ---
         self.setup_click_tab()
-        self.setup_type_tab()
+        self._add_section_divider(tab_action)
         self.setup_image_tab()
+        self._add_section_divider(tab_action)
         self.setup_color_tab()
-        self.setup_wait_tab()
-        self.setup_vars_tab()
+        self._add_section_divider(tab_action)
         self.setup_vision_tab()
+
+        # --- ⌨️ Input Tab: Type/Hotkey + Wait ---
+        self.setup_type_tab()
+        self._add_section_divider(tab_input)
+        self.setup_wait_tab()
+
+        # --- 🔀 Logic Tab: Labels/If/Jump + Variables ---
         self.setup_logic_tab()
+        self._add_section_divider(tab_logic_main)
+        self.setup_vars_tab()
+
+        # --- Standalone Tabs ---
         self.setup_stealth_tab()
         self.setup_log_tab()
-
-        # Preset & Control Section (Bottom Right)
-        self.setup_bottom_panels(self.scroll_right)
 
         # Footer
         self.setup_footer()
@@ -395,7 +507,7 @@ class AutoMationApp(
 
     def setup_bottom_panels(self, parent):
         f_bot = ctk.CTkFrame(parent, fg_color="transparent")
-        f_bot.pack(fill="x", padx=15, pady=15)
+        f_bot.pack(fill="x", side="bottom", padx=10, pady=(5, 10))
 
         # Target Window Frame
         f_target = ctk.CTkFrame(f_bot, fg_color=COLOR_INNER, corner_radius=15, border_width=1, border_color=BORDER_COLOR)
@@ -455,9 +567,6 @@ class AutoMationApp(
             f_pre_row, text="ก็อบ", width=45, command=self.duplicate_current_preset, fg_color=COLOR_ACCENT, hover_color=GRADIENT_START
         ).pack(side="left", padx=2)
         ctk.CTkButton(f_pre_row, text="ลบ", width=40, command=self.delete_current_preset, fg_color=COLOR_DANGER).pack(side="left", padx=2)
-
-        # Main Control Frame (Execution) - Moved to Left Side via setup_execution_panel
-        # This function now only handles Target + Presets for the right side
 
     def setup_execution_panel(self, parent):
         """Execution controls - placed on the left side below the action list"""
@@ -532,6 +641,7 @@ class AutoMationApp(
     def reset_target_window(self):
         self.target_hwnd = None
         self.target_title = "ทั้งหน้าจอ (Global)"
+        self.last_child_hwnd = None
         self.lbl_target.configure(text=f"เป้าหมาย: {self.target_title}")
         self.auto_save_presets()
         self.lbl_status.configure(text="รีเซ็ตเป้าหมายเป็น 'ทั้งหน้าจอ' เรียบร้อย", text_color=COLOR_MUTED)
@@ -544,8 +654,15 @@ class AutoMationApp(
         overlay.attributes("-fullscreen", True, "-alpha", 0.3, "-topmost", True)
         overlay.configure(fg_color="black", cursor="hand2")
 
+        _overlay_timer_holder = [None]
+
         def on_click(event):
             x, y = event.x_root, event.y_root
+            if _overlay_timer_holder[0] is not None:
+                try:
+                    self.after_cancel(_overlay_timer_holder[0])
+                except Exception:
+                    pass
             overlay.destroy()
             self.deiconify()
             hwnd = win32gui.WindowFromPoint((x, y))
@@ -559,6 +676,7 @@ class AutoMationApp(
                 except Exception:
                     break
             self.target_hwnd = root
+            self.last_child_hwnd = None
             t = win32gui.GetWindowText(root)
             self.target_title = t if t else f"ID: {root}"
             self.lbl_target.configure(text=f"เป้าหมาย: {self.target_title}")
@@ -566,9 +684,9 @@ class AutoMationApp(
             self.lbl_status.configure(text=f"ล็อคเป้าหมาย: {self.target_title}", text_color=COLOR_MUTED)
 
         overlay.bind("<Button-1>", on_click)
-        overlay.bind("<Escape>", lambda e: [overlay.destroy(), self.deiconify()])
+        # MED-07: Cancel overlay timer on Escape to prevent stale timer callbacks
+        overlay.bind("<Escape>", lambda e: [self._cancel_timer(_overlay_timer_holder[0]), overlay.destroy(), self.deiconify()])
 
-        # INST-5 + BUG-4: Auto-destroy target picker overlay after 30s (try-except for TclError)
         def _auto_close_overlay():
             try:
                 if overlay.winfo_exists():
@@ -577,7 +695,9 @@ class AutoMationApp(
             except Exception:
                 pass
 
-        self.after(30000, _auto_close_overlay)
+        _overlay_timer = self.after(30000, _auto_close_overlay)
+        _overlay_timer_holder[0] = _overlay_timer
+        self._pending_after_ids.append(_overlay_timer)
 
         def _focus_target():
             overlay.lift()
@@ -586,7 +706,14 @@ class AutoMationApp(
 
         self.after(100, _focus_target)
 
-
 if __name__ == "__main__":
+    # Enable DPI awareness when running autoclick.py directly (dev mode)
+    try:
+        ctypes.windll.shcore.SetProcessDpiAwareness(2)
+    except Exception:
+        try:
+            ctypes.windll.user32.SetProcessDPIAware()
+        except Exception:
+            pass
     app = AutoMationApp()
     app.mainloop()

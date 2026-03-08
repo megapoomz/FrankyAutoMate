@@ -1,11 +1,11 @@
 import json
 import os
+import copy
 import logging
 import threading
 import win32gui
 from tkinter import filedialog, messagebox
-from core.constants import COLOR_SUCCESS
-
+from core.constants import COLOR_SUCCESS, AUTO_SAVE_DEBOUNCE_MS
 
 class PresetMixin:
     """Handles preset loading, saving, and switching"""
@@ -24,7 +24,7 @@ class PresetMixin:
         preset = self.get_current_preset()
         if preset:
             with self.actions_lock:
-                preset["actions"] = self.actions.copy()
+                preset["actions"] = copy.deepcopy(self.actions)
             preset["target_hwnd"] = self.target_hwnd
             preset["target_title"] = self.target_title
             try:
@@ -38,6 +38,17 @@ class PresetMixin:
             preset["stealth_jitter_radius"] = self.var_stealth_jitter_radius.get()
             preset["stealth_timing"] = self.var_stealth_timing.get()
             preset["stealth_timing_val"] = self.var_stealth_timing_val.get()
+            # Also save hide_window and random_title stealth settings
+            preset["stealth_hide_window"] = self.var_stealth_hide_window.get()
+            preset["stealth_random_title"] = self.var_stealth_random_title.get()
+            # Save additional settings that were missing
+            preset["stealth_sendinput"] = self.var_stealth_sendinput.get()
+            if hasattr(self, "var_follow_window"):
+                preset["follow_window"] = self.var_follow_window.get()
+            if hasattr(self, "var_debug_mode"):
+                preset["debug_mode"] = self.var_debug_mode.get()
+            if hasattr(self, "var_dry_run"):
+                preset["dry_run"] = self.var_dry_run.get()
 
     def load_preset_to_ui(self, index):
         if 0 <= index < len(self.presets):
@@ -46,7 +57,8 @@ class PresetMixin:
 
             preset = self.presets[index]
             with self.actions_lock:
-                self.actions = preset.get("actions", []).copy()
+                # Use deepcopy to prevent shared mutation between preset and live actions
+                self.actions = copy.deepcopy(preset.get("actions", []))
             self.target_hwnd = preset.get("target_hwnd")
             self.target_title = preset.get("target_title", "ทั้งหน้าจอ (Global)")
 
@@ -74,6 +86,17 @@ class PresetMixin:
             self.var_stealth_jitter_radius.set(preset.get("stealth_jitter_radius", 3.0))
             self.var_stealth_timing.set(preset.get("stealth_timing", False))
             self.var_stealth_timing_val.set(preset.get("stealth_timing_val", 0.2))
+            # Restore hide_window and random_title stealth settings
+            self.var_stealth_hide_window.set(preset.get("stealth_hide_window", False))
+            self.var_stealth_random_title.set(preset.get("stealth_random_title", False))
+            # Restore additional settings
+            self.var_stealth_sendinput.set(preset.get("stealth_sendinput", False))
+            if hasattr(self, "var_follow_window"):
+                self.var_follow_window.set(preset.get("follow_window", False))
+            if hasattr(self, "var_debug_mode"):
+                self.var_debug_mode.set(preset.get("debug_mode", False))
+            if hasattr(self, "var_dry_run"):
+                self.var_dry_run.set(preset.get("dry_run", False))
 
             self.update_list_display()
 
@@ -95,29 +118,60 @@ class PresetMixin:
     def save_presets_logic(self, filepath):
         save_data = []
         for preset in self.presets:
-            p = preset.copy()
+            # R4-01: Use deepcopy to prevent shared mutation with live preset data
+            p = copy.deepcopy(preset)
             p["target_hwnd"] = None
             save_data.append(p)
-        with open(filepath, "w", encoding="utf-8") as f:
-            json.dump(save_data, f, ensure_ascii=False, indent=2)
+
+        # Use DPAPI encryption if available, with plaintext fallback
+        try:
+            from utils.security import save_config_secure
+            save_config_secure({"presets": save_data}, filepath)
+        except ImportError:
+            with open(filepath, "w", encoding="utf-8") as f:
+                json.dump(save_data, f, ensure_ascii=False, indent=2)
 
     def load_presets_logic(self, filepath, is_startup=False):
         try:
-            with open(filepath, "r", encoding="utf-8") as f:
-                loaded = json.load(f)
+            # Try DPAPI-encrypted format first, fallback to legacy plaintext
+            loaded = None
+            try:
+                from utils.security import load_config_secure
+                raw = load_config_secure(filepath)
+                if isinstance(raw, dict) and "presets" in raw:
+                    loaded = raw["presets"]
+                elif isinstance(raw, list):
+                    loaded = raw  # Legacy plaintext format loaded via secure loader
+            except ImportError:
+                pass
+
+            # Fallback: direct JSON load (legacy plaintext)
+            if loaded is None:
+                with open(filepath, "r", encoding="utf-8") as f:
+                    raw = json.load(f)
+                if isinstance(raw, dict) and "presets" in raw:
+                    loaded = raw["presets"]
+                elif isinstance(raw, list):
+                    loaded = raw
+
             if loaded and isinstance(loaded, list):
                 self.presets = loaded
                 self.current_preset_index = 0
                 self.load_preset_to_ui(0)
                 self.update_preset_ui()
-                # Run preloading in background to avoid blocking startup
-                threading.Thread(target=self.preload_images, daemon=True).start()
+                # Only call preload_images if the method exists
+                if hasattr(self, "preload_images"):
+                    threading.Thread(target=self.preload_images, daemon=True).start()
                 msg = f"โหลดแล้ว: {len(self.presets)} ชุด"
                 self.lbl_status.configure(text=msg, text_color="#27ae60")
         except Exception as e:
+            # Report load errors to user instead of silently swallowing
             if not is_startup:
-                print(f"Load Error: {e}")
-            pass
+                logging.warning(f"Load Error: {e}")
+                try:
+                    self.lbl_status.configure(text=f"โหลดไฟล์ล้มเหลว: {e}", text_color="#e74c3c")
+                except Exception:
+                    pass
 
     def add_new_preset(self):
         self.save_current_to_preset()
@@ -144,8 +198,9 @@ class PresetMixin:
         if not curr_p:
             return
 
-        # Deep copy the preset data except UI specific transient fields
-        new_p = json.loads(json.dumps(curr_p))
+        # Use deepcopy instead of json.dumps/loads to preserve Python types
+        # (json converts tuples to lists, breaking RGB tuple comparisons)
+        new_p = copy.deepcopy(curr_p)
         new_p["name"] = f"{curr_p['name']} (ก๊อปปี้)"
         new_p["hotkey"] = None  # Reset hotkey for the copy
         new_p["target_hwnd"] = None  # Reset transient handle
@@ -175,6 +230,8 @@ class PresetMixin:
         for i, p in enumerate(self.presets):
             if p["name"] == selected_name:
                 self.current_preset_index = i
+                # Clear stale child handle from previous preset's target
+                self.last_child_hwnd = None
                 self.load_preset_to_ui(i)
                 self.update_preset_ui()
                 break
@@ -213,7 +270,7 @@ class PresetMixin:
                 self.after_cancel(self._auto_save_timer)
             except Exception:
                 pass
-        self._auto_save_timer = self.after(1000, self._do_auto_save)
+        self._auto_save_timer = self.after(AUTO_SAVE_DEBOUNCE_MS, self._do_auto_save)
 
     def _do_auto_save(self):
         try:

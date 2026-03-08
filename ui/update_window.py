@@ -1,7 +1,6 @@
 import os
 import sys
 import threading
-import requests
 import zipfile
 import shutil
 import tempfile
@@ -10,7 +9,6 @@ from pathlib import Path
 from tkinter import messagebox
 import customtkinter as ctk
 from core.constants import COLOR_BG, COLOR_ACCENT
-
 
 class UpdateProgressWindow(ctk.CTkToplevel):
     def __init__(self, parent, new_version, download_url):
@@ -60,6 +58,8 @@ class UpdateProgressWindow(ctk.CTkToplevel):
 
     def do_download(self):
         try:
+            import requests
+
             temp_dir = Path(tempfile.gettempdir()) / "FrankyAutoMate_Update"
             if temp_dir.exists():
                 shutil.rmtree(temp_dir)
@@ -84,6 +84,19 @@ class UpdateProgressWindow(ctk.CTkToplevel):
                             self.after(0, lambda p=pct, d=downloaded, t=total_size: self.update_ui(p, d, t))
 
             if self.cancelled:
+                return
+
+            self.after(0, lambda: self.lbl_status.configure(text="กำลังตรวจสอบไฟล์..."))
+
+            # SEC-1: Verify checksum of downloaded file before extracting
+            from utils.security import verify_file_checksum
+            if not verify_file_checksum(str(zip_path), filename=f"FrankyAutoMate_v{self.new_version}.zip"):
+                self.after(0, lambda: messagebox.showerror(
+                    "ผิดพลาด",
+                    "Checksum ไม่ตรง! ไฟล์อัปเดตอาจถูกเปลี่ยนแปลง กรุณาดาวน์โหลดใหม่",
+                    parent=self
+                ))
+                self.after(0, self.destroy)
                 return
 
             self.after(0, lambda: self.lbl_status.configure(text="กำลังติดตั้งอัปเดต..."))
@@ -137,15 +150,27 @@ class UpdateProgressWindow(ctk.CTkToplevel):
                 self.destroy()
                 return
 
-            # SEC-4: Sanitize paths to prevent command injection
+            # Sanitize paths to prevent command injection
             def safe_path(p):
                 """Remove potentially dangerous characters from paths for batch script"""
-                return str(p).replace('"', "").replace("&", "").replace("|", "").replace(">", "").replace("<", "").replace("^", "")
+                # Resolve to absolute path first to neutralize .. traversal
+                result = str(Path(p).resolve())
+                # Aggressive sanitization — strip ALL batch-special chars
+                for ch in ('"', "'", "&", "|", ">", "<", "^", "%", "!", ";", "@",
+                           "\n", "\r", "(", ")", "`", "{", "}", "$", "~", ".."):
+                    result = result.replace(ch, "")
+                return result
 
             safe_new_exe = safe_path(new_exe)
             safe_current_exe = safe_path(current_exe)
             safe_exe_basename = safe_path(os.path.basename(current_exe))
-            safe_parent_dir = safe_path(new_exe.parent.parent)
+
+            # Validate parent_dir is inside temp before allowing rmdir
+            resolved_parent = Path(new_exe).resolve().parent.parent
+            temp_root = Path(tempfile.gettempdir()).resolve()
+            if not str(resolved_parent).startswith(str(temp_root)):
+                raise ValueError(f"Cleanup dir '{resolved_parent}' is outside temp directory — aborting for safety")
+            safe_parent_dir = safe_path(resolved_parent)
 
             script_path = Path(tempfile.gettempdir()) / "franky_automate_updater.bat"
 

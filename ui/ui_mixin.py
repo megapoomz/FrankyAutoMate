@@ -2,7 +2,7 @@ import time
 import logging
 import customtkinter as ctk
 from core.constants import COLOR_SUCCESS, COLOR_ACCENT, COLOR_INNER, COLOR_CARD, BORDER_COLOR, COLOR_MUTED
-
+from core.logger import logger as _logger
 
 class UIMixin:
     """Handles UI tab setups, list displays, and visual feedback"""
@@ -11,7 +11,8 @@ class UIMixin:
 
     def log_message(self, message: str, color: str = "white", level: int = logging.INFO):
         """Batched logging: queues messages and flushes to UI every 100ms"""
-        from core.logger import logger
+        # Use module-level logger singleton (no duplicate handlers)
+        logger = _logger
 
         # Log to file immediately using central logger
         if level == logging.ERROR:
@@ -49,7 +50,13 @@ class UIMixin:
         try:
             self.txt_log.configure(state="normal")
             for now, message, color in buf:
-                self.txt_log.insert("end", f"[{now}] {message}\n", color)
+                # MED-05: Register color tag if not already registered
+                if color and color != "white":
+                    try:
+                        self.txt_log.tag_config(color, foreground=color)
+                    except Exception:
+                        pass
+                self.txt_log.insert("end", f"[{now}] {message}\n", color if color and color != "white" else ())
             self.txt_log.see("end")
             self.txt_log.configure(state="disabled")
         except Exception:
@@ -98,10 +105,13 @@ class UIMixin:
                 m.deiconify()
                 m.lift()
 
-                # Cancel previous hide timer and set new one
+                # Track marker timer to prevent TclError on app close
                 if hasattr(self, "_click_marker_timer"):
-                    self.after_cancel(self._click_marker_timer)
-                self._click_marker_timer = self.after(400, lambda: m.withdraw() if m.winfo_exists() else None)
+                    try:
+                        self.after_cancel(self._click_marker_timer)
+                    except Exception:
+                        pass
+                self._click_marker_timer = self._track_after(400, lambda: m.withdraw() if m.winfo_exists() else None)
             except Exception:
                 pass
 
@@ -129,9 +139,13 @@ class UIMixin:
                 m.deiconify()
                 m.lift()
 
+                # Track marker timer to prevent TclError on app close
                 if hasattr(self, "_found_marker_timer"):
-                    self.after_cancel(self._found_marker_timer)
-                self._found_marker_timer = self.after(400, lambda: m.withdraw() if m.winfo_exists() else None)
+                    try:
+                        self.after_cancel(self._found_marker_timer)
+                    except Exception:
+                        pass
+                self._found_marker_timer = self._track_after(400, lambda: m.withdraw() if m.winfo_exists() else None)
             except Exception:
                 pass
 
@@ -164,14 +178,17 @@ class UIMixin:
                 m.deiconify()
                 m.lift()
 
+                # Track marker timer to prevent TclError on app close
                 if hasattr(self, "_search_region_timer"):
-                    self.after_cancel(self._search_region_timer)
-                self._search_region_timer = self.after(150, lambda: m.withdraw() if m.winfo_exists() else None)
+                    try:
+                        self.after_cancel(self._search_region_timer)
+                    except Exception:
+                        pass
+                self._search_region_timer = self._track_after(150, lambda: m.withdraw() if m.winfo_exists() else None)
             except Exception:
                 pass
 
         self.after(0, _show)
-
 
 class ToolTip(object):
     """
@@ -209,7 +226,7 @@ class ToolTip(object):
     def showtip(self, event=None):
         x = y = 0
         try:
-            x, y, cx, cy = self.widget.bbox("insert")
+            x, y, _cx, _cy = self.widget.bbox("insert")
         except (TypeError, Exception):
             # bbox("insert") fails on widgets without a text cursor (buttons, labels, etc.)
             pass
@@ -222,11 +239,7 @@ class ToolTip(object):
         self.tw.wm_overrideredirect(True)
         self.tw.wm_attributes("-topmost", True)
 
-        try:
-            # Avoid transparentcolor — can cause invisible tooltips
-            pass
-        except Exception:
-            pass
+        # Removed empty try/except (was a no-op placeholder)
 
         label = ctk.CTkLabel(
             self.tw,
@@ -248,4 +261,26 @@ class ToolTip(object):
         tw = self.tw
         self.tw = None
         if tw:
-            tw.destroy()
+            try:
+                tw.destroy()
+            except Exception:
+                pass
+
+    def destroy(self):
+        """Explicit cleanup — call this when the host widget is destroyed.
+        More reliable than __del__ which is not guaranteed to run."""
+        try:
+            self.unschedule()
+            self.hidetip()
+            self.widget.unbind("<Enter>")
+            self.widget.unbind("<Leave>")
+        except Exception:
+            pass
+
+    def __del__(self):
+        """Cleanup pending callbacks on garbage collection (fallback)"""
+        try:
+            self.unschedule()
+            self.hidetip()
+        except Exception:
+            pass

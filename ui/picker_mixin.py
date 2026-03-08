@@ -1,8 +1,8 @@
 import customtkinter as ctk
 import pyautogui
 import win32gui
+import win32api
 from core.constants import COLOR_ACCENT, COLOR_WARNING, COLOR_MUTED, COLOR_SUCCESS, COLOR_DANGER
-
 
 class PickerMixin:
     """Handles screen picking logic for coordinates, regions, and colors"""
@@ -15,8 +15,18 @@ class PickerMixin:
         self.pick_overlay.configure(fg_color="black", cursor="crosshair")
 
         def on_overlay_click(event):
-            self.picked_x_raw = event.x_root
-            self.picked_y_raw = event.y_root
+            # Use GetCursorPos for DPI-accurate coordinates (not Tkinter event)
+            try:
+                cursor_pos = win32api.GetCursorPos()
+                self.picked_x_raw = cursor_pos[0]
+                self.picked_y_raw = cursor_pos[1]
+            except Exception:
+                self.picked_x_raw = event.x_root
+                self.picked_y_raw = event.y_root
+            # BUG-A5: Cancel timeout to prevent spurious destroy
+            if hasattr(self, '_pick_overlay_timeout') and self._pick_overlay_timeout:
+                self.after_cancel(self._pick_overlay_timeout)
+                self._pick_overlay_timeout = None
             self.pick_overlay.destroy()
             self.deiconify()
             self.calculate_picked_coords()
@@ -28,9 +38,8 @@ class PickerMixin:
 
         self.pick_overlay.bind("<Button-1>", on_overlay_click)
         self.pick_overlay.bind("<Escape>", on_cancel)
-        # INST-5: Auto-destroy overlay if it loses focus or after 30s timeout
-        self.pick_overlay.bind("<FocusOut>", on_cancel)
-        self._pick_overlay_timeout = self.after(30000, on_cancel, None)
+        # Removed <FocusOut> binding — causes premature dismiss on multi-monitor setups
+        self._pick_overlay_timeout = self._track_after(30000, on_cancel, None)
 
         def _focus_loc():
             self.pick_overlay.lift()
@@ -82,17 +91,33 @@ class PickerMixin:
         self.canvas_reg.pack(fill="both", expand=True)
 
         def on_press(event):
-            self.start_x, self.start_y = event.x, event.y
+            # Use GetCursorPos for DPI-accurate region coordinates
+            try:
+                cursor_pos = win32api.GetCursorPos()
+                self.start_x, self.start_y = cursor_pos[0], cursor_pos[1]
+            except Exception:
+                self.start_x, self.start_y = event.x_root, event.y_root
             if self.rect_id:
                 self.canvas_reg.delete(self.rect_id)
             self.rect_id = self.canvas_reg.create_rectangle(self.start_x, self.start_y, self.start_x, self.start_y, outline="red", width=2)
 
         def on_drag(event):
-            self.canvas_reg.coords(self.rect_id, self.start_x, self.start_y, event.x, event.y)
+            # FIX: Use GetCursorPos for DPI-accurate drag coordinates (matching on_press)
+            try:
+                cursor_pos = win32api.GetCursorPos()
+                cx, cy = cursor_pos[0], cursor_pos[1]
+            except Exception:
+                cx, cy = event.x_root, event.y_root
+            self.canvas_reg.coords(self.rect_id, self.start_x, self.start_y, cx, cy)
 
         def on_release(event):
             try:
-                ex, ey = event.x, event.y
+                # Use GetCursorPos for DPI-accurate region end point
+                try:
+                    cursor_pos = win32api.GetCursorPos()
+                    ex, ey = cursor_pos[0], cursor_pos[1]
+                except Exception:
+                    ex, ey = event.x_root, event.y_root
                 self.reg_overlay.destroy()
                 self.deiconify()
                 x1, x2 = min(self.start_x, ex), max(self.start_x, ex)
@@ -114,11 +139,15 @@ class PickerMixin:
         self.canvas_reg.bind("<B1-Motion>", on_drag)
         self.canvas_reg.bind("<ButtonRelease-1>", on_release)
         self.reg_overlay.bind("<Escape>", lambda e: [self.reg_overlay.destroy(), self.deiconify()])
-        # INST-5: Auto-destroy region overlay after 30s timeout
-        self.after(
-            30000,
-            lambda: [self.reg_overlay.destroy(), self.deiconify()] if hasattr(self, "reg_overlay") and self.reg_overlay.winfo_exists() else None,
-        )
+        # Auto-destroy with try-except to prevent TclError
+        def _auto_close_reg():
+            try:
+                if hasattr(self, "reg_overlay") and self.reg_overlay.winfo_exists():
+                    self.reg_overlay.destroy()
+                    self.deiconify()
+            except Exception:
+                pass
+        self._track_after(30000, _auto_close_reg)
 
     def start_pick_color(self):
         self.lbl_status.configure(text="โหมดดูดสี: คลิกจุดที่ต้องการดูดสี...", text_color=COLOR_WARNING)
@@ -128,9 +157,16 @@ class PickerMixin:
         overlay.configure(fg_color="black", cursor="crosshair")
 
         def on_overlay_click(event):
-            ax, ay = event.x_root, event.y_root
+            # Use GetCursorPos for DPI-accurate color pick coordinates
             try:
-                rgb = pyautogui.pixel(ax, ay)
+                cursor_pos = win32api.GetCursorPos()
+                ax, ay = cursor_pos[0], cursor_pos[1]
+            except Exception:
+                ax, ay = event.x_root, event.y_root
+            try:
+                # COMPAT-03: Use fast Win32 GetPixel instead of slow pyautogui.pixel
+                from utils.win32_input import fast_get_pixel
+                rgb = fast_get_pixel(ax, ay)
                 self.current_color_data = (ax, ay, rgb)
                 self.lbl_color_info.configure(text=f"พิกัด: {ax},{ay} RGB: {rgb}")
 
@@ -148,8 +184,15 @@ class PickerMixin:
 
         overlay.bind("<Button-1>", on_overlay_click)
         overlay.bind("<Escape>", lambda e: [overlay.destroy(), self.deiconify()])
-        # INST-5: Auto-destroy color picker overlay after 30s timeout
-        self.after(30000, lambda: [overlay.destroy(), self.deiconify()] if overlay.winfo_exists() else None)
+        # Auto-destroy with try-except to prevent TclError
+        def _auto_close_color():
+            try:
+                if overlay.winfo_exists():
+                    overlay.destroy()
+                    self.deiconify()
+            except Exception:
+                pass
+        self._track_after(30000, _auto_close_color)
 
         # improved focus handling
         def _focus():

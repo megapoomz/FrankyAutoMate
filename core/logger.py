@@ -4,7 +4,6 @@ import time
 import logging
 from logging.handlers import RotatingFileHandler
 
-
 def setup_logger(name: str = "FrankyAutoMate") -> logging.Logger:
     """Configures and returns the central logger for the application."""
     logger = logging.getLogger(name)
@@ -15,8 +14,10 @@ def setup_logger(name: str = "FrankyAutoMate") -> logging.Logger:
 
     logger.setLevel(logging.INFO)
 
-    # Ensure logs directory exists
-    log_dir = os.path.join(os.getenv("APPDATA", os.getcwd()), "FrankyAutoMate", "logs")
+    # Ensure logs directory exists (Path.home() fallback if APPDATA not set)
+    from pathlib import Path
+    _appdata = os.getenv("APPDATA") or str(Path.home())
+    log_dir = os.path.join(_appdata, "FrankyAutoMate", "logs")
     os.makedirs(log_dir, exist_ok=True)
     log_file = os.path.join(log_dir, f"automate_{time.strftime('%Y%m%d')}.log")
 
@@ -33,7 +34,6 @@ def setup_logger(name: str = "FrankyAutoMate") -> logging.Logger:
     logger.addHandler(console_handler)
 
     return logger
-
 
 # Global default logger instance
 logger = setup_logger()
