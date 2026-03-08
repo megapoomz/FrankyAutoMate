@@ -2,8 +2,6 @@ import os
 from typing import Dict, Any
 from tkinter import filedialog, messagebox
 import customtkinter as ctk
-import pyautogui
-import win32api
 from core.constants import WAIT_MODE_TIMEOUT
 
 class ActionMixin:

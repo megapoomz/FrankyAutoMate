@@ -171,125 +171,108 @@ class EngineMixin:
         _CORNER_THRESHOLD = EMERGENCY_CORNER_PX
         _CORNER_HOLD_TIME = EMERGENCY_CORNER_HOLD
 
-        while self.is_running:
-            try:
-                mx, my = win32api.GetCursorPos()  # Faster than pyautogui.position()
-                if mx <= _CORNER_THRESHOLD and my <= _CORNER_THRESHOLD:
-                    if _corner_start is None:
-                        _corner_start = time.perf_counter()
-                    elif time.perf_counter() - _corner_start >= _CORNER_HOLD_TIME:
-                        self.log_message("[EMERGENCY STOP] เมาส์ค้างที่มุมซ้ายบน → หยุดฉุกเฉิน", "#ef4444")
-                        self.is_running = False
-                        break
-                else:
-                    _corner_start = None
-            except Exception:
-                _corner_start = None
-
-            if loops > 0 and count >= loops:
-                break
-            count += 1
-            loop_msg = f"รอบที่ {count}" + (f" /{loops}" if loops > 0 else "")
-            self.log_message(f"--- {loop_msg} ---")
-
-            i = 0
-            # Deep copy ONCE before loop to avoid per-cycle cost
-            with self.actions_lock:
-                run_actions = copy.deepcopy(self.actions)
-            # Rebuild label index cache each loop for sync safety
-            self._label_index_cache = {}
-            for idx, act in enumerate(run_actions):
-                if act.get("type") == "logic_label":
-                    self._label_index_cache[act.get("name", "")] = idx
-            num_actions = len(run_actions)
-            while i < num_actions:
-                if not self.is_running:
-                    break
-
-                # --- STEP START: High Frequency Window Context Check ---
-                # 1. Dynamic Following (If enabled)
-                self._try_follow_window()
-                # INST-4: Validate target_hwnd is still valid (not recycled)
-                if not (getattr(self, "var_follow_window", None) and self.var_follow_window.get()) and self.target_hwnd:
-                    if hasattr(self, "_validate_target_hwnd"):
-                        self._validate_target_hwnd()
-
-                # 2. Ensure context focus (If a target is locked/followed)
-                # Skip forcing focus if the current action uses background mode
-                action_mode = run_actions[i].get("mode", "normal") if i < num_actions else "normal"
-                click_mode = run_actions[i].get("click_mode", "normal") if i < num_actions else "normal"
-                is_bg_action = action_mode == "background" or click_mode == "background"
-                if not is_bg_action:
-                    self._ensure_target_focus(delay=FOCUS_DELAY_DEFAULT)
-                # --- END STEP CONTEXT ---
-
-                action = run_actions[i]
-
-                # Handling Paused State (General or Step Mode)
-                if self.is_paused or self.var_step_mode.get():
-                    if self.var_step_mode.get():
-                        self.safe_update_ui("btn_run", text="[NEXT] ต่อไป (NEXT STEP)", fg_color="#3498db")
-                        self.safe_update_ui("lbl_status", text=f"[PAUSED] ขั้นตอน {i+1}: รอคำสั่ง...", text_color="#f1c40f")
-
-                    self.is_paused = True  # Force pause if step mode
-                    self.next_step.clear()
-                    while self.is_paused and self.is_running:
-                        if self.next_step.wait(0.1):
-                            break
-
-                    # Reset button after resume
-                    self.safe_update_ui("btn_run", text="[STOP] หยุด (STOP)", fg_color="#c0392b")
-
-                    # Recover focus to target window if using foreground methods
-                    self._ensure_target_focus(delay=0.3, bring_to_top=True)
-
-                if not self.is_running:
-                    break
-                self.highlight_action(i)
-
-                try:
-                    # Execute and handle jumping logic
-                    jump_to = self.execute_one(action, i, run_actions)
-
-                    if jump_to is not None:
-                        i = jump_to
-                        continue  # Skip standard increment
-
-                except Exception as e:
-                    self.log_message(f"[ERROR] เกิดข้อผิดพลาดที่ขั้นตอน {i+1}: {e}", "red")
-                    self.is_running = False
-                    self.safe_update_ui("lbl_status", text=f"[ERROR] ข้อผิดพลาด: {e}", text_color="red")
-                    break
-
-                # Default increment
-                i += 1
-
-                # Delay between steps
-                # BUG-A3: Use run_actions (snapshot) instead of self.actions (live)
-                if i < num_actions and not self.var_step_mode.get():
-                    time.sleep(0.005 + self.speed_delay)
-
-        self.is_running = False
-        # Release mss GDI handle to prevent resource leak (HIGH-04: only bg_runner thread closes sct)
-        # R4-02: Use BaseException-safe finally to handle KeyboardInterrupt/SystemExit
         try:
-            sct_local = getattr(self, "sct", None)
-            self.sct = None  # Clear reference first to prevent race with on_app_close
-            if sct_local is not None:
-                sct_local.close()
-        except BaseException:
-            pass
-        duration = time.perf_counter() - self.perf_metrics.get("start_time", time.perf_counter())
-        self.highlight_action(-1)
-        self.safe_update_ui("btn_run", text="เริ่มทำงาน (START)", fg_color="#27ae60")
-        self.safe_update_ui("lbl_status", text="จบการทำงาน", text_color="#2ecc71")
+            while self.is_running:
+                try:
+                    mx, my = win32api.GetCursorPos()
+                    if mx <= _CORNER_THRESHOLD and my <= _CORNER_THRESHOLD:
+                        if _corner_start is None:
+                            _corner_start = time.perf_counter()
+                        elif time.perf_counter() - _corner_start >= _CORNER_HOLD_TIME:
+                            self.log_message("[EMERGENCY STOP] เมาส์ค้างที่มุมซ้ายบน → หยุดฉุกเฉิน", "#ef4444")
+                            self.is_running = False
+                            break
+                    else:
+                        _corner_start = None
+                except Exception:
+                    _corner_start = None
 
-        # Performance Summary
-        total_actions = len(self.perf_metrics.get("actions_exec", []))
-        self.log_message(f"=== จบการทำงาน (รวม {total_actions} ขั้นตอน, ใช้เวลา {duration:.1f}s) ===")
-        if total_actions > 0 and self.var_debug_mode.get():
-            avg = (duration * 1000) / total_actions
-            self.log_message(f"📊 เฉลี่ย: {avg:.0f}ms ต่อขั้นตอน", level=logging.DEBUG)
+                if loops > 0 and count >= loops:
+                    break
+                count += 1
+                loop_msg = f"รอบที่ {count}" + (f" /{loops}" if loops > 0 else "")
+                self.log_message(f"--- {loop_msg} ---")
+
+                i = 0
+                with self.actions_lock:
+                    run_actions = copy.deepcopy(self.actions)
+                self._label_index_cache = {}
+                for idx, act in enumerate(run_actions):
+                    if act.get("type") == "logic_label":
+                        self._label_index_cache[act.get("name", "")] = idx
+                num_actions = len(run_actions)
+                while i < num_actions:
+                    if not self.is_running:
+                        break
+
+                    self._try_follow_window()
+                    if not (getattr(self, "var_follow_window", None) and self.var_follow_window.get()) and self.target_hwnd:
+                        if hasattr(self, "_validate_target_hwnd"):
+                            self._validate_target_hwnd()
+
+                    action_mode = run_actions[i].get("mode", "normal") if i < num_actions else "normal"
+                    click_mode = run_actions[i].get("click_mode", "normal") if i < num_actions else "normal"
+                    is_bg_action = action_mode == "background" or click_mode == "background"
+                    if not is_bg_action:
+                        self._ensure_target_focus(delay=FOCUS_DELAY_DEFAULT)
+
+                    action = run_actions[i]
+
+                    if self.is_paused or self.var_step_mode.get():
+                        if self.var_step_mode.get():
+                            self.safe_update_ui("btn_run", text="[NEXT] ต่อไป (NEXT STEP)", fg_color="#3498db")
+                            self.safe_update_ui("lbl_status", text=f"[PAUSED] ขั้นตอน {i+1}: รอคำสั่ง...", text_color="#f1c40f")
+
+                        self.is_paused = True
+                        self.next_step.clear()
+                        while self.is_paused and self.is_running:
+                            if self.next_step.wait(0.1):
+                                break
+
+                        self.safe_update_ui("btn_run", text="[STOP] หยุด (STOP)", fg_color="#c0392b")
+                        self._ensure_target_focus(delay=0.3, bring_to_top=True)
+
+                    if not self.is_running:
+                        break
+                    self.highlight_action(i)
+
+                    try:
+                        jump_to = self.execute_one(action, i, run_actions)
+                        if jump_to is not None:
+                            i = jump_to
+                            continue
+                    except Exception as e:
+                        self.log_message(f"[ERROR] เกิดข้อผิดพลาดที่ขั้นตอน {i+1}: {e}", "red")
+                        self.is_running = False
+                        self.safe_update_ui("lbl_status", text=f"[ERROR] ข้อผิดพลาด: {e}", text_color="red")
+                        break
+
+                    i += 1
+
+                    if i < num_actions and not self.var_step_mode.get():
+                        time.sleep(0.005 + self.speed_delay)
+        except BaseException as e:
+            self.log_message(f"[CRITICAL] bg_runner crashed: {e}", "red", level=logging.ERROR)
+        finally:
+            # BUG-05 FIX: Always cleanup regardless of how we exit
+            self.is_running = False
+            try:
+                sct_local = getattr(self, "sct", None)
+                self.sct = None
+                if sct_local is not None:
+                    sct_local.close()
+            except BaseException:
+                pass
+            duration = time.perf_counter() - self.perf_metrics.get("start_time", time.perf_counter())
+            self.highlight_action(-1)
+            self.safe_update_ui("btn_run", text="เริ่มทำงาน (START)", fg_color="#27ae60")
+            self.safe_update_ui("lbl_status", text="จบการทำงาน", text_color="#2ecc71")
+
+            total_actions = len(self.perf_metrics.get("actions_exec", []))
+            self.log_message(f"=== จบการทำงาน (รวม {total_actions} ขั้นตอน, ใช้เวลา {duration:.1f}s) ===")
+            if total_actions > 0 and self.var_debug_mode.get():
+                avg = (duration * 1000) / total_actions
+                self.log_message(f"📊 เฉลี่ย: {avg:.0f}ms ต่อขั้นตอน", level=logging.DEBUG)
 
     def execute_one(self, action: Dict[str, Any], current_index: int, run_actions: list = None) -> Optional[int]:
         start_time = time.perf_counter()
@@ -629,7 +612,6 @@ class EngineMixin:
             secs = 1.0
         if self.var_stealth_timing.get():
             variance = self.var_stealth_timing_val.get()
-            # Clamp factor to prevent zero/negative wait
             factor = max(0.1, 1.0 + random.uniform(-variance, variance))
             secs *= factor
             self.log_message(f"[WAIT] รอ: {secs:.2f} วินาที (สุ่มจาก {action.get('seconds', '?')}s)", level=logging.DEBUG)
@@ -637,14 +619,22 @@ class EngineMixin:
             self.log_message(f"[WAIT] รอ: {secs:.2f} วินาที")
 
         wait_time = max(0, secs)
-        # MED-04: Use Event-based wait instead of busy-polling (reduces CPU overhead)
-        # next_step event is set by stop_automation(), so this will exit cleanly on stop
+        # WARN-04 FIX: Log when secs got clamped to 0
+        if secs < 0:
+            self.log_message(f"[WAIT] Negative wait time ({secs:.2f}s) clamped to 0", level=logging.DEBUG)
+        # BUG-01 FIX: Use Event-based wait so stop/step can interrupt instantly
         if wait_time > 0 and self.is_running:
-            # Split long waits into chunks so emergency stop can still trigger
             remaining = wait_time
             while remaining > 0 and self.is_running:
-                chunk = min(remaining, 0.5)  # Check every 500ms at most
-                time.sleep(chunk)
+                chunk = min(remaining, 0.5)
+                # next_step.wait() returns True if set (stop requested), allowing instant abort
+                if self.next_step.wait(chunk):
+                    # Event was set — stop or step requested
+                    if not self.is_running:
+                        break
+                    # In step mode, next_step is set to advance — don't break wait
+                    if self.var_step_mode.get():
+                        break
                 remaining -= chunk
 
     def _execute_image_search(self, action: Dict[str, Any]) -> None:
@@ -708,9 +698,7 @@ class EngineMixin:
             time.sleep(0.05)
 
         if found_loc:
-            # Use shared follow-window helper
             self._try_follow_window()
-
             time.sleep(0.03)
 
             dry = self.var_dry_run.get()
@@ -721,15 +709,7 @@ class EngineMixin:
                 return
             if do_click:
                 tx, ty = found_loc[0] + off_x, found_loc[1] + off_y
-                cm = action.get("click_mode", "normal")
-                btn = action.get("button", "left")
-                if cm == "background":
-                    self.do_background_click(tx, ty, btn)
-                else:
-                    self.perform_click(tx, ty, button=btn, mode=cm)
-
-            # "break" mode is consolidated into stop_after in execute_one
-            # No separate is_running=False here — handled by universal stop_after check
+                self._do_action_click(action, tx, ty)
         else:
             self.log_message("[NOT FOUND] ไม่พบรูปภาพ")
 
@@ -791,14 +771,7 @@ class EngineMixin:
             if dry:
                 return
             if do_click:
-                cm = action.get("click_mode", "normal")
-                btn = action.get("button", "left")
-                if cm == "background":
-                    self.do_background_click(last_pos[0], last_pos[1], btn)
-                else:
-                    self.perform_click(last_pos[0], last_pos[1], button=btn, mode=cm)
-            # "break" mode consolidated into stop_after in execute_one
-            # No separate is_running=False here — handled by universal stop_after check
+                self._do_action_click(action, last_pos[0], last_pos[1])
         else:
             self.log_message("[NOT FOUND] ไม่พบสี")
 
@@ -862,12 +835,7 @@ class EngineMixin:
             if dry:
                 return
             if do_click and click_x and click_y:
-                cm = action.get("click_mode", "normal")
-                btn = action.get("button", "left")
-                if cm == "background":
-                    self.do_background_click(click_x, click_y, btn)
-                else:
-                    self.perform_click(click_x, click_y, button=btn, mode=cm)
+                self._do_action_click(action, click_x, click_y)
         else:
             self.log_message(f"[FAIL] เงื่อนไขสีไม่ตรง ({logic})")
 
@@ -1034,7 +1002,15 @@ class EngineMixin:
                 self._bg_send_click(**click_args)
 
         except Exception as e:
-            self.log_message(f"[BG CLICK ERR] {e}", "red", level=logging.WARNING)
+            # WARN-02 FIX: Detect UIPI block — if PostMessage consistently fails, warn user
+            err_msg = str(e).lower()
+            if "access" in err_msg or "denied" in err_msg or "1400" in err_msg:
+                self.log_message(
+                    f"[BG CLICK] PostMessage blocked (UIPI?) — target may require Admin. Try running as Admin or use normal click mode.",
+                    "#f59e0b", level=logging.WARNING
+                )
+            else:
+                self.log_message(f"[BG CLICK ERR] {e}", "red", level=logging.WARNING)
 
     def perform_click(self, x: float, y: float, button: str = "left", mode: str = "normal") -> None:
         """Centralized click method handling stealth, dry-run, and background modes"""
@@ -1088,75 +1064,65 @@ class EngineMixin:
                     pyautogui.click(x, y, button=button)
 
     def get_cached_screenshot(self, region: Optional[tuple] = None, as_gray: bool = False) -> np.ndarray:
-        # Protect screenshot cache from concurrent access
-        with self._screenshot_lock:
-            current_time = time.perf_counter()
-            cache_valid = self.screenshot_cache is not None and current_time - self.screenshot_cache_time < self.screenshot_cache_ttl
+        # PERF-03 FIX: Check cache validity outside lock first (fast path)
+        current_time = time.perf_counter()
+        cache_valid = self.screenshot_cache is not None and current_time - self.screenshot_cache_time < self.screenshot_cache_ttl
 
-            if not cache_valid:
-                # Always capture full-screen and cache it (slicing is cheaper than separate grabs)
-                if not self.sct:
-                    # mss is not thread-safe — only init from bg thread
-                    if threading.current_thread() is threading.main_thread():
-                        logging.warning("get_cached_screenshot called from main thread, using pyautogui fallback")
-                        self.screenshot_cache = np.array(pyautogui.screenshot())
-                        self.screenshot_cache_time = current_time
-                        ss = self.screenshot_cache
-                        if as_gray:
-                            self._screenshot_gray_cache = cv2.cvtColor(ss, cv2.COLOR_RGB2GRAY)
-                            ss = self._screenshot_gray_cache
-                        if region:
-                            rx, ry, rw, rh = region
-                            if ry + rh <= ss.shape[0] and rx + rw <= ss.shape[1]:
-                                ss = ss[ry:ry+rh, rx:rx+rw]
-                        return ss
-                    try:
-                        self.sct = mss.mss()
-                    except Exception as e:
-                        # Log mss init failure with context
-                        self.log_message(f"[WARN] mss init failed: {e}, using pyautogui fallback", level=logging.WARNING)
-                        self.sct = None
-                # R4-03: Guard against sct being None after fallback path above
-                if self.sct is None:
-                    self.screenshot_cache = np.array(pyautogui.screenshot())
-                    self._screenshot_gray_cache = None
-                    self.screenshot_cache_time = current_time
-                    ss = self.screenshot_cache
-                    if as_gray:
+        if not cache_valid:
+            # Only lock when we need to update the cache
+            with self._screenshot_lock:
+                # Double-check after acquiring lock (another thread may have refreshed)
+                current_time = time.perf_counter()
+                cache_valid = self.screenshot_cache is not None and current_time - self.screenshot_cache_time < self.screenshot_cache_ttl
+                if not cache_valid:
+                    self._refresh_screenshot_cache(current_time)
+
+        ss = self.screenshot_cache
+
+        if as_gray:
+            if self._screenshot_gray_cache is not None:
+                ss = self._screenshot_gray_cache
+            else:
+                with self._screenshot_lock:
+                    if self._screenshot_gray_cache is None:
                         self._screenshot_gray_cache = cv2.cvtColor(ss, cv2.COLOR_RGB2GRAY)
-                        ss = self._screenshot_gray_cache
-                    if region:
-                        rx, ry, rw, rh = region
-                        if ry + rh <= ss.shape[0] and rx + rw <= ss.shape[1]:
-                            ss = ss[ry:ry+rh, rx:rx+rw]
-                    return ss
-                try:
-                    sct_img = self.sct.grab(self.sct.monitors[0])
-                    raw = np.array(sct_img)
-                    self.screenshot_cache = raw[:, :, :3][:, :, ::-1]
-                    self._screenshot_gray_cache = cv2.cvtColor(raw, cv2.COLOR_BGRA2GRAY)
-                except Exception:
-                    self.log_message("[WARN] mss failed, falling back to pyautogui (slower)", level=logging.WARNING)
-                    self.screenshot_cache = np.array(pyautogui.screenshot())
-                    self._screenshot_gray_cache = None  # Clear stale gray cache
+                    ss = self._screenshot_gray_cache
+
+        if region:
+            rx, ry, rw, rh = region
+            if ry + rh <= ss.shape[0] and rx + rw <= ss.shape[1]:
+                return ss[ry : ry + rh, rx : rx + rw]
+        return ss
+
+    def _refresh_screenshot_cache(self, current_time: float) -> None:
+        """Internal: refresh screenshot cache. Must be called under _screenshot_lock."""
+        if not self.sct:
+            if threading.current_thread() is threading.main_thread():
+                logging.warning("get_cached_screenshot called from main thread, using pyautogui fallback")
+                self.screenshot_cache = np.array(pyautogui.screenshot())
+                self._screenshot_gray_cache = None
                 self.screenshot_cache_time = current_time
-
-            ss = self.screenshot_cache
-
-            # Simplified grayscale path
-            if as_gray:
-                if self._screenshot_gray_cache is not None:
-                    ss = self._screenshot_gray_cache
-                else:
-                    self._screenshot_gray_cache = cv2.cvtColor(ss, cv2.COLOR_RGB2GRAY)
-                    ss = self._screenshot_gray_cache
-
-            # Region slicing (cheap numpy view, no copy)
-            if region:
-                rx, ry, rw, rh = region
-                if ry + rh <= ss.shape[0] and rx + rw <= ss.shape[1]:
-                    return ss[ry : ry + rh, rx : rx + rw]
-            return ss
+                return
+            try:
+                self.sct = mss.mss()
+            except Exception as e:
+                self.log_message(f"[WARN] mss init failed: {e}, using pyautogui fallback", level=logging.WARNING)
+                self.sct = None
+        if self.sct is None:
+            self.screenshot_cache = np.array(pyautogui.screenshot())
+            self._screenshot_gray_cache = None
+            self.screenshot_cache_time = current_time
+            return
+        try:
+            sct_img = self.sct.grab(self.sct.monitors[0])
+            raw = np.array(sct_img)
+            self.screenshot_cache = raw[:, :, :3][:, :, ::-1]
+            self._screenshot_gray_cache = cv2.cvtColor(raw, cv2.COLOR_BGRA2GRAY)
+        except Exception:
+            self.log_message("[WARN] mss failed, falling back to pyautogui (slower)", level=logging.WARNING)
+            self.screenshot_cache = np.array(pyautogui.screenshot())
+            self._screenshot_gray_cache = None
+        self.screenshot_cache_time = current_time
 
     def _execute_logic_if(self, action: Dict[str, Any], current_index: int, run_actions: Optional[list] = None) -> Optional[int]:
         condition = action.get("condition", "image_found")
@@ -1165,11 +1131,17 @@ class EngineMixin:
 
         self.log_message(f"[LOGIC] [IF] ตรวจสอบเงื่อนไข: {condition}")
 
-        if condition == "image_found":
+        # INC-02 FIX: Handle negated conditions by stripping prefix and inverting result
+        negate = False
+        effective_condition = condition
+        if condition.startswith("not_"):
+            negate = True
+            effective_condition = condition[4:]  # Strip "not_" prefix
+
+        if effective_condition == "image_found":
             path = action.get("path")
             region = action.get("region")
             if path:
-                # BUG-A6: Validate image exists and log error if not
                 if not os.path.exists(path):
                     self.log_message(f"[ERROR] IF condition: ไม่พบไฟล์รูปภาพ: {path}", "red")
                 else:
@@ -1178,7 +1150,6 @@ class EngineMixin:
                         self.log_message(f"[ERROR] IF condition: อ่านไฟล์รูปภาพไม่ได้: {path}", "red")
                     else:
                         screen_gray = self.get_cached_screenshot(region=region, as_gray=True)
-                        # Use shared grayscale conversion helper
                         template = self._get_gray_template(path, raw)
                         if template is not None:
                             res = cv2.matchTemplate(screen_gray, template, cv2.TM_CCOEFF_NORMED)
@@ -1186,7 +1157,7 @@ class EngineMixin:
                             conf = action.get("confidence", 0.75)
                             met = max_val >= conf
 
-        elif condition == "color_match":
+        elif effective_condition == "color_match":
             rgb = action.get("rgb")
             tx, ty = action.get("x", 0), action.get("y", 0)
             tol = action.get("tolerance", 10)
@@ -1204,7 +1175,11 @@ class EngineMixin:
             met = self._evaluate_expression(left, op, right)
             self.log_message(f"[LOGIC] [IF] เปรียบเทียบ: {left} {op} {right} -> {'จริง' if met else 'เท็จ'}")
 
-        jump_on = action.get("jump_on", "true")  # true=Jump if Met, false=Jump if Not Met
+        # Apply negation for not_* conditions
+        if negate:
+            met = not met
+
+        jump_on = action.get("jump_on", "true")
         should_jump = False
 
         if jump_on == "true":
@@ -1213,7 +1188,7 @@ class EngineMixin:
                 should_jump = True
             else:
                 self.log_message("[FAIL] เงื่อนไขไม่เป็นจริง ข้ามไปขั้นตอนถัดไป")
-        else:  # jump_on == "false" (Standard IF Block logic)
+        else:
             if not met:
                 self.log_message(f"[FAIL] เงื่อนไขไม่เป็นจริง (Jump on False) -> ข้ามไปที่: {target_label}")
                 should_jump = True
@@ -1286,6 +1261,14 @@ class EngineMixin:
             try:
                 # Use cached grayscale screenshot (avoids redundant cv2.cvtColor)
                 gray = self.get_cached_screenshot(region=region, as_gray=True)
+
+                # PERF-05 FIX: Downscale large images for faster OCR
+                h_img, w_img = gray.shape[:2]
+                scale = 1.0
+                if h_img * w_img > 2_000_000:  # >2MP (e.g. 1920x1080)
+                    scale = 0.5
+                    gray = cv2.resize(gray, (w_img // 2, h_img // 2), interpolation=cv2.INTER_AREA)
+
                 # Get data including positions
                 data = pytesseract.image_to_data(gray, output_type=pytesseract.Output.DICT, lang="tha+eng")
 
@@ -1293,9 +1276,10 @@ class EngineMixin:
                     if target_text in text.lower():
                         # Found! Calculate coordinates relative to screen
                         tw, th = data["width"][i], data["height"][i]
-                        rx = data["left"][i] + (region[0] if region else 0)
-                        ry = data["top"][i] + (region[1] if region else 0)
-                        found_loc = (rx + tw // 2, ry + th // 2)
+                        # PERF-05: Scale coordinates back if downscaled
+                        rx = int((data["left"][i] + tw / 2) / scale) + (region[0] if region else 0)
+                        ry = int((data["top"][i] + th / 2) / scale) + (region[1] if region else 0)
+                        found_loc = (rx, ry)
                         break
             except Exception as e:
                 self.log_message(f"[WARN] OCR Error: {e}", level=logging.DEBUG)
@@ -1316,12 +1300,7 @@ class EngineMixin:
             if dry:
                 return
             if do_click:
-                cm = action.get("click_mode", "normal")
-                btn = action.get("button", "left")
-                if cm == "background":
-                    self.do_background_click(found_loc[0], found_loc[1], btn)
-                else:
-                    self.perform_click(found_loc[0], found_loc[1], button=btn, mode=cm)
+                self._do_action_click(action, found_loc[0], found_loc[1])
         else:
             self.log_message(f'[NOT FOUND] ไม่พบข้อความ: "{target_text}"')
 
@@ -1411,10 +1390,18 @@ class EngineMixin:
 
     # --- Shared Helper Methods ---
 
+    def _do_action_click(self, action: Dict[str, Any], x: float, y: float) -> None:
+        """OVERLAP-02 FIX: Consolidated click dispatch for search actions."""
+        cm = action.get("click_mode", "normal")
+        btn = action.get("button", "left")
+        if cm == "background":
+            self.do_background_click(x, y, btn)
+        else:
+            self.perform_click(x, y, button=btn, mode=cm)
+
     def _get_bg_target(self):
         """Shared background target validation — returns best valid HWND."""
         target = getattr(self, "last_child_hwnd", None) or self.target_hwnd
-        # Validate cached child handle is still valid
         if target and not win32gui.IsWindow(target):
             target = self.target_hwnd
         if not target:
@@ -1487,8 +1474,11 @@ class EngineMixin:
         return self.image_cache[gray_key]
 
     def _maybe_evict_cache(self):
-        """OVERLAP-04: Shared cache eviction — removes oldest entries when cache exceeds max size."""
-        if len(self.image_cache) > IMAGE_CACHE_MAX_SIZE:
-            keys_to_remove = list(self.image_cache.keys())[:IMAGE_CACHE_EVICT_COUNT]
-            for k in keys_to_remove:
-                del self.image_cache[k]
+        """RACE-02 FIX: Thread-safe cache eviction with simple guard."""
+        try:
+            if len(self.image_cache) > IMAGE_CACHE_MAX_SIZE:
+                keys_to_remove = list(self.image_cache.keys())[:IMAGE_CACHE_EVICT_COUNT]
+                for k in keys_to_remove:
+                    self.image_cache.pop(k, None)  # Use pop to avoid KeyError if concurrent delete
+        except RuntimeError:
+            pass  # Dict size changed during iteration — safe to skip, next call will retry

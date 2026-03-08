@@ -150,6 +150,14 @@ class VariablesMixin:
         left = left.lstrip("$")
         left = f"${left}"
 
+        # BUG-04 FIX: Also auto-prepend $ for right if it looks like a variable reference
+        if right and not right.startswith("$"):
+            # Only prepend $ if right side looks like a variable name (not a pure number)
+            try:
+                float(right)
+            except (ValueError, TypeError):
+                right = f"${right}"
+
         self.add_action_item(
             {"type": "logic_if", "condition": "var_compare", "left": left, "op": op, "right": right, "target_label": target, "jump_on": "true"}
         )

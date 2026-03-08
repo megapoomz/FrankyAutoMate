@@ -59,6 +59,35 @@ def verify_file_checksum(filepath: str, expected_hash: str = None, filename: str
         logging.error(f"Checksum verification failed: {e}")
         return False
 
+
+def compute_file_sha256(filepath: str) -> str:
+    """Compute SHA256 hash of a file. Use this during build to populate KNOWN_CHECKSUMS."""
+    sha256 = hashlib.sha256()
+    with open(filepath, "rb") as f:
+        for chunk in iter(lambda: f.read(8192), b""):
+            sha256.update(chunk)
+    return sha256.hexdigest()
+
+
+def generate_checksums_for_dir(directory: str) -> dict:
+    """
+    SEC-02 FIX: Build-time helper — scans a directory and returns
+    {filename: sha256_hex} for all .exe and .zip files.
+
+    Usage during build:
+        from utils.security import generate_checksums_for_dir
+        checksums = generate_checksums_for_dir("./bin")
+        # Paste into KNOWN_CHECKSUMS dict
+    """
+    checksums = {}
+    for fname in os.listdir(directory):
+        if fname.endswith((".exe", ".zip", ".msi")):
+            full_path = os.path.join(directory, fname)
+            if os.path.isfile(full_path):
+                checksums[fname] = compute_file_sha256(full_path)
+                logging.info(f"Generated checksum for {fname}: {checksums[fname]}")
+    return checksums
+
 # ── DPAPI Config Encryption ─────────────────────────────────────────
 
 def _dpapi_available():

@@ -32,7 +32,9 @@ class UIMixin:
             self._log_buffer = []
             self._log_flush_scheduled = False
 
-        self._log_buffer.append((now, message, color))
+        # WARN-06 FIX: Cap buffer at 200 entries to prevent memory bloat
+        if len(self._log_buffer) < 200:
+            self._log_buffer.append((now, message, color))
 
         if not self._log_flush_scheduled:
             self._log_flush_scheduled = True
@@ -50,13 +52,19 @@ class UIMixin:
         try:
             self.txt_log.configure(state="normal")
             for now, message, color in buf:
-                # MED-05: Register color tag if not already registered
                 if color and color != "white":
                     try:
                         self.txt_log.tag_config(color, foreground=color)
                     except Exception:
                         pass
                 self.txt_log.insert("end", f"[{now}] {message}\n", color if color and color != "white" else ())
+            # WARN-07 FIX: Trim log to last 5000 lines to prevent UI slowdown
+            try:
+                line_count = int(self.txt_log.index('end-1c').split('.')[0])
+                if line_count > 5000:
+                    self.txt_log.delete('1.0', f'{line_count - 5000}.0')
+            except Exception:
+                pass
             self.txt_log.see("end")
             self.txt_log.configure(state="disabled")
         except Exception:
@@ -130,16 +138,21 @@ class UIMixin:
                     m.overrideredirect(True)
                     m.attributes("-topmost", True, "-transparentcolor", "white", "-alpha", 0.6)
                     c = ctk.CTkCanvas(m, width=w, height=h, bg="white", highlightthickness=0)
-                    c.pack()
+                    c.pack(fill="both", expand=True)
                     c.create_rectangle(2, 2, w - 2, h - 2, outline="#2ecc71", width=3)
                     self._found_marker = m
                     self._found_marker_canvas = c
+                else:
+                    # BUG-06 FIX: Resize canvas when marker is reused with different dimensions
+                    c = self._found_marker_canvas
+                    c.configure(width=w, height=h)
+                    c.delete("all")
+                    c.create_rectangle(2, 2, w - 2, h - 2, outline="#2ecc71", width=3)
 
                 m.geometry(f"{w}x{h}+{int(x-w/2)}+{int(y-h/2)}")
                 m.deiconify()
                 m.lift()
 
-                # Track marker timer to prevent TclError on app close
                 if hasattr(self, "_found_marker_timer"):
                     try:
                         self.after_cancel(self._found_marker_timer)
@@ -228,41 +241,40 @@ class ToolTip(object):
         try:
             x, y, _cx, _cy = self.widget.bbox("insert")
         except (TypeError, Exception):
-            # bbox("insert") fails on widgets without a text cursor (buttons, labels, etc.)
             pass
         x += self.widget.winfo_rootx() + 25
         y += self.widget.winfo_rooty() + 20
 
-        # creates a toplevel window
-        self.tw = ctk.CTkToplevel(self.widget)
-        # Leaves only the label and removes the app window
-        self.tw.wm_overrideredirect(True)
-        self.tw.wm_attributes("-topmost", True)
-
-        # Removed empty try/except (was a no-op placeholder)
-
-        label = ctk.CTkLabel(
-            self.tw,
-            text=self.text,
-            justify="left",
-            bg_color=COLOR_INNER,
-            fg_color=COLOR_INNER,
-            text_color=COLOR_MUTED,
-            corner_radius=6,
-            width=200,
-            wraplength=self.wraplength,
-            font=("Inter", 12),
-        )
-        label.pack(ipadx=5, ipady=5)
+        # WARN-05 FIX: Reuse existing toplevel window instead of creating new one
+        if self.tw is None or not self.tw.winfo_exists():
+            self.tw = ctk.CTkToplevel(self.widget)
+            self.tw.wm_overrideredirect(True)
+            self.tw.wm_attributes("-topmost", True)
+            self._tw_label = ctk.CTkLabel(
+                self.tw,
+                text=self.text,
+                justify="left",
+                bg_color=COLOR_INNER,
+                fg_color=COLOR_INNER,
+                text_color=COLOR_MUTED,
+                corner_radius=6,
+                width=200,
+                wraplength=self.wraplength,
+                font=("Inter", 12),
+            )
+            self._tw_label.pack(ipadx=5, ipady=5)
+        else:
+            # Update text in case it changed
+            self._tw_label.configure(text=self.text)
 
         self.tw.geometry("+%d+%d" % (x, y))
+        self.tw.deiconify()
 
     def hidetip(self):
         tw = self.tw
-        self.tw = None
         if tw:
             try:
-                tw.destroy()
+                tw.withdraw()  # Hide instead of destroy for reuse
             except Exception:
                 pass
 

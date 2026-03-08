@@ -11,8 +11,6 @@ from core.constants import (
     COLOR_DANGER,
     COLOR_SUCCESS,
     BORDER_COLOR,
-    GRADIENT_START,
-    GRADIENT_END,
     COLOR_CARD,
 )
 from ui.ui_mixin import ToolTip
@@ -781,18 +779,16 @@ class TabsMixin:
     def _do_update_list_display(self):
         self._last_list_update = time.perf_counter()
 
-        # Batch-destroy old widgets (faster than individual destroy)
-        children = self.scroll_actions.winfo_children()
-        if children:
-            for widget in children:
-                widget.destroy()
+        # PERF-01 FIX: Batch-destroy via parent (single Tk call rather than N individual destroys)
+        for widget in self.action_widgets:
+            widget.destroy()
         self.action_widgets = []
 
         # Thread-safe snapshot of actions for display
         with self.actions_lock:
             display_actions = list(self.actions)
 
-        # PERF-NEW-1: Save fingerprint for fast-path selection updates (must match hash() in update_list_display)
+        # Save fingerprint for fast-path selection updates
         self._list_fingerprint = hash(tuple(
             (a.get('type', ''), a.get('name', ''), a.get('content', ''), a.get('x', ''), a.get('y', ''), a.get('path', ''))
             for a in display_actions

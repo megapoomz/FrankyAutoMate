@@ -51,12 +51,14 @@ class HotkeyMixin:
                 others = [k for k in self.recorded_keys if k not in modifiers_list]
                 all_keys = [k for k in (sorted(modifiers) + sorted(others)) if k]
                 self.current_recorded_str = "+".join(all_keys)
+                # RACE-03 FIX: Read recording_state under lock to prevent torn reads
+                _state = self.recording_state
 
-            if self.recording_state == "main_hotkey":
+            if _state == "main_hotkey":
                 self.after(0, lambda: self.lbl_hotkey.configure(text=f"[ {self.current_recorded_str.upper()} ]"))
-            elif self.recording_state == "preset_hotkey":
+            elif _state == "preset_hotkey":
                 self.after(0, lambda: self.lbl_preset_hotkey.configure(text=f"[ {self.current_recorded_str} ]"))
-            elif self.recording_state == "action_hotkey":
+            elif _state == "action_hotkey":
                 self.after(0, lambda: self.entry_text.delete(0, "end"))
                 self.after(0, lambda: self.entry_text.insert(0, self.current_recorded_str))
                 self.after(0, lambda: self.var_input_mode.set("hotkey"))

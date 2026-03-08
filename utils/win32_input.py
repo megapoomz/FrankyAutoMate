@@ -29,6 +29,18 @@ if _screen_w == 0:
     _screen_x = 0
     _screen_y = 0
 
+# COMPAT-04: Validate INPUT struct size at module load
+# Expected: 28 bytes (x86) or 40 bytes (x64)
+_input_size = ctypes.sizeof(INPUT)
+import struct as _struct
+_expected = 40 if _struct.calcsize("P") == 8 else 28
+if _input_size != _expected:
+    import logging as _logging
+    _logging.warning(
+        f"INPUT struct size mismatch: got {_input_size}, expected {_expected}. "
+        f"SendInput may fail silently. Python arch: {'x64' if _struct.calcsize('P') == 8 else 'x86'}"
+    )
+
 _metrics_last_refresh = time.monotonic()
 _METRICS_REFRESH_INTERVAL = 30  # seconds between auto-refreshes
 

@@ -1,10 +1,12 @@
-customtkinter
-pyautogui
-opencv-python
-pillow
-pynput
-pywin32
-requests
-mss
-numpy
-pyperclip
+customtkinter>=5.2.0,<6.0.0
+pyautogui>=0.9.53,<1.0.0
+opencv-python>=4.8.0,<5.0.0
+pillow>=10.0.0,<12.0.0
+pynput>=1.7.6,<2.0.0
+pywin32>=306
+requests>=2.31.0,<3.0.0
+mss>=9.0.0,<10.0.0
+numpy>=1.24.0,<3.0.0
+pyperclip>=1.8.2,<2.0.0
+# Optional: OCR support (requires Tesseract binary)
+# pytesseract>=0.3.10,<1.0.0

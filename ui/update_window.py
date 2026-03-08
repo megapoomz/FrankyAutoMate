@@ -153,8 +153,9 @@ class UpdateProgressWindow(ctk.CTkToplevel):
             # Sanitize paths to prevent command injection
             def safe_path(p):
                 """Remove potentially dangerous characters from paths for batch script"""
-                # Resolve to absolute path first to neutralize .. traversal
-                result = str(Path(p).resolve())
+                import unicodedata
+                # SEC-04 FIX: Normalize Unicode first (NFKC converts fullwidth chars like ＆ to &)
+                result = unicodedata.normalize("NFKC", str(Path(p).resolve()))
                 # Aggressive sanitization — strip ALL batch-special chars
                 for ch in ('"', "'", "&", "|", ">", "<", "^", "%", "!", ";", "@",
                            "\n", "\r", "(", ")", "`", "{", "}", "$", "~", ".."):
@@ -184,7 +185,7 @@ echo ========================================
 echo.
 
 echo [1/3] Waiting for application to exit...
-taskkill /F /IM "{safe_exe_basename}" >nul 2>&1
+taskkill /F /PID {os.getpid()} >nul 2>&1
 timeout /t 2 /nobreak >nul
 
 echo [2/3] Replacing executable...
@@ -195,7 +196,7 @@ if errorlevel 1 (
     set /a RETRIES+=1
     if !RETRIES! lss 5 (
         echo    Retry !RETRIES!/5 - File still locked, waiting...
-        taskkill /F /IM "{safe_exe_basename}" >nul 2>&1
+        taskkill /F /PID {os.getpid()} >nul 2>&1
         timeout /t 2 /nobreak >nul
         goto RETRY_COPY
     ) else (

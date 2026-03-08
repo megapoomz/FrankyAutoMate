@@ -187,6 +187,7 @@ class AutoMationApp(
 
     def on_app_close(self):
         """Cleanup resources before closing"""
+        # BUG-02 FIX: Single stop path — stop_automation sets is_running=False
         if self.is_running:
             self.stop_automation()
             t = getattr(self, "execution_thread", None)
@@ -206,13 +207,6 @@ class AutoMationApp(
             except Exception:
                 pass
         self.last_child_hwnd = None
-        # HIGH-04: Don't close sct here — bg_runner owns it and handles cleanup.
-        # Just signal stop and let bg_runner's finally block close sct safely.
-        if self.is_running:
-            self.is_running = False
-            # Give bg_runner a moment to stop and clean up sct
-            if hasattr(self, 'execution_thread') and self.execution_thread and self.execution_thread.is_alive():
-                self.execution_thread.join(timeout=1.0)
         if hasattr(self, "listener"):
             try:
                 self.listener.stop()
@@ -247,14 +241,11 @@ class AutoMationApp(
         return timer_id
 
     def _cleanup_pending_afters(self):
-        """MED-01: Consolidated cleanup — evict old tracked timer IDs when list grows too large."""
+        """BUG-03 FIX: Discard old timer IDs without canceling them.
+        Old IDs are almost certainly already executed (one-shot timers).
+        Canceling them risks killing recurring health-check timers."""
         if len(self._pending_after_ids) > 100:
-            old_ids = self._pending_after_ids[:-50]
-            for old_id in old_ids:
-                try:
-                    self.after_cancel(old_id)
-                except Exception:
-                    pass
+            # Just drop old IDs — they've already fired or were one-shot
             self._pending_after_ids = self._pending_after_ids[-50:]
 
     def _cancel_timer(self, timer_id):
@@ -707,13 +698,10 @@ class AutoMationApp(
         self.after(100, _focus_target)
 
 if __name__ == "__main__":
-    # Enable DPI awareness when running autoclick.py directly (dev mode)
+    # OVERLAP-01 FIX: DPI awareness is set in main.py — only set here for direct dev runs
     try:
         ctypes.windll.shcore.SetProcessDpiAwareness(2)
     except Exception:
-        try:
-            ctypes.windll.user32.SetProcessDPIAware()
-        except Exception:
-            pass
+        pass
     app = AutoMationApp()
     app.mainloop()

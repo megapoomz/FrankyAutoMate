@@ -40,9 +40,9 @@ class LogicMixin:
         self.var_logic_condition = ctk.StringVar(value="image_found")
         menu_cond = ctk.CTkOptionMenu(
             f_if_row1,
-            values=["image_found", "color_match"],
+            values=["image_found", "color_match", "not_image_found", "not_color_match"],
             variable=self.var_logic_condition,
-            width=140,
+            width=160,
             fg_color="#1e293b",
             dropdown_fg_color="#0f172a",
             command=self.update_logic_source_ui,
@@ -267,8 +267,10 @@ class LogicMixin:
         if not hasattr(self, "f_logic_source"):
             return
         cond = self.var_logic_condition.get()
+        # INC-02: Map negated conditions to their base for UI display
+        effective_cond = cond.replace("not_", "") if cond.startswith("not_") else cond
 
-        if cond == "image_found":
+        if effective_cond == "image_found":
             path = getattr(self, "current_img_path", None)
             display = os.path.basename(path) if path else "(ยังไม่เลือกรูปภาพ)"
             if len(display) > 25:
@@ -281,7 +283,7 @@ class LogicMixin:
             if hasattr(self, "f_logic_conf"):
                 self.f_logic_conf.pack(fill="x", padx=15, pady=(0, 5))
 
-        elif cond == "color_match":
+        elif effective_cond == "color_match":
             data = getattr(self, "current_color_data", None)
             if data:
                 r, g, b = data[2]
@@ -317,15 +319,13 @@ class LogicMixin:
         self.check_picker_status(0)
 
     def check_picker_status(self, count=0):
-        # Poll for color data update (Stop after 60 seconds)
+        """INC-03 FIX: Poll for color data with early exit and reasonable limit."""
         self.update_logic_source_ui()
-        # Stop polling early if color data is already picked
         if self.current_color_data is not None:
-            return
+            return  # Data picked — stop polling immediately
         try:
             window_state = self.state()
         except Exception:
-            return  # Window being destroyed
-        if window_state == "normal" and count < 60:
-            # Track polling timer for proper cleanup on close
+            return
+        if window_state == "normal" and count < 30:  # Reduced from 60 to 30 seconds
             self._track_after(1000, lambda: self.check_picker_status(count + 1))

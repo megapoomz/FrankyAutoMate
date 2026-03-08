@@ -16,14 +16,20 @@ import ctypes
 # Add parent directory to path for imports
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-# Enable DPI awareness for proper coordinate mapping on HiDPI displays
+# COMPAT-02 FIX: Try DPI Awareness V2 first (best for multi-monitor DPI changes)
 try:
-    ctypes.windll.shcore.SetProcessDpiAwareness(2)  # PROCESS_PER_MONITOR_DPI_AWARE
-except Exception:
+    # V2: DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2 (Windows 10 1703+)
+    ctypes.windll.user32.SetProcessDpiAwarenessContext(ctypes.c_void_p(-4))
+except (AttributeError, OSError):
     try:
-        ctypes.windll.user32.SetProcessDPIAware()  # Fallback for older Windows
+        # V1: PROCESS_PER_MONITOR_DPI_AWARE (Windows 8.1+)
+        ctypes.windll.shcore.SetProcessDpiAwareness(2)
     except Exception:
-        pass
+        try:
+            # Legacy: PROCESS_DPI_AWARE (Windows Vista+)
+            ctypes.windll.user32.SetProcessDPIAware()
+        except Exception:
+            pass
 
 # Import and run the main application
 from autoclick import AutoMationApp  # noqa: E402
