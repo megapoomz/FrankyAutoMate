@@ -136,7 +136,8 @@ class LogicMixin:
     def refresh_label_dropdowns(self):
         if not hasattr(self, "opt_logic_target"):
             return  # Tab not setup yet
-        labels = [a["name"] for a in self.actions if a["type"] == "logic_label"]
+        with self.actions_lock:
+            labels = [a["name"] for a in self.actions if a["type"] == "logic_label"]
         self.logic_label_list = labels if labels else ["(ไม่มี Label)"]
         try:
             self.opt_logic_target.configure(values=self.logic_label_list)
@@ -228,7 +229,10 @@ class LogicMixin:
 
     def _fill_action_params(self, action):
         cond = action["condition"]
-        if cond == "image_found":
+        # CRIT-02 FIX: Strip not_ prefix to correctly populate params for negated conditions
+        effective_cond = cond.replace("not_", "", 1) if cond.startswith("not_") else cond
+
+        if effective_cond == "image_found":
             # Validate image path exists before creating action
             if not getattr(self, "current_img_path", ""):
                 from tkinter import messagebox
@@ -237,7 +241,7 @@ class LogicMixin:
             action["path"] = self.current_img_path
             action["region"] = self.current_region
             action["confidence"] = self.var_logic_conf.get()
-        elif cond == "color_match":
+        elif effective_cond == "color_match":
             # Validate color data exists before creating action
             if not self.current_color_data:
                 from tkinter import messagebox

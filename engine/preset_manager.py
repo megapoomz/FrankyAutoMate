@@ -52,8 +52,9 @@ class PresetMixin:
 
     def load_preset_to_ui(self, index):
         if 0 <= index < len(self.presets):
-            # Clear old cache to save memory
-            self.image_cache.clear()
+            # P3-03 FIX: Clear cache under lock to prevent race with bg threads
+            with self._screenshot_lock:
+                self.image_cache.clear()
 
             preset = self.presets[index]
             with self.actions_lock:
@@ -264,13 +265,22 @@ class PresetMixin:
             pass
 
     def auto_save_presets(self):
+        """HIGH-04 FIX: Schedule save on main thread to prevent Tkinter variable reads from bg threads."""
         # Debounce: only save once per 1000ms even if called rapidly (PERF-2: increased from 500ms)
-        if hasattr(self, "_auto_save_timer"):
-            try:
-                self.after_cancel(self._auto_save_timer)
-            except Exception:
-                pass
-        self._auto_save_timer = self.after(AUTO_SAVE_DEBOUNCE_MS, self._do_auto_save)
+        def _schedule():
+            if hasattr(self, "_auto_save_timer"):
+                try:
+                    self.after_cancel(self._auto_save_timer)
+                except Exception:
+                    pass
+            self._auto_save_timer = self.after(AUTO_SAVE_DEBOUNCE_MS, self._do_auto_save)
+
+        # Ensure scheduling happens on main thread (self.after is not safe from bg threads)
+        import threading
+        if threading.current_thread() is threading.main_thread():
+            _schedule()
+        else:
+            self.after(0, _schedule)
 
     def _do_auto_save(self):
         try:
@@ -289,6 +299,10 @@ class PresetMixin:
 
     def run_preset(self, index):
         if self.is_running:
+            return
+        # MED-07 FIX: Validate index to prevent IndexError if preset was deleted
+        if index < 0 or index >= len(self.presets):
+            self.log_message(f"[WARN] Preset index {index} out of range (max {len(self.presets)-1})", "#f59e0b")
             return
         self.save_current_to_preset()
         self.current_preset_index = index

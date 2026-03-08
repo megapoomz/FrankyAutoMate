@@ -1,7 +1,7 @@
 import os
 import time
 
-from tkinter import filedialog, messagebox
+from tkinter import messagebox
 import customtkinter as ctk
 from core.constants import (
     COLOR_ACCENT,
@@ -12,6 +12,8 @@ from core.constants import (
     COLOR_SUCCESS,
     BORDER_COLOR,
     COLOR_CARD,
+    GRADIENT_START,
+    GRADIENT_END,
 )
 from ui.ui_mixin import ToolTip
 
@@ -750,12 +752,13 @@ class TabsMixin:
         # If so, do a lightweight 2-widget update instead of full rebuild
         with self.actions_lock:
             # Hash based on action count + types + key fields for change detection
-            new_fingerprint = hash(tuple(
+            # MED-09 FIX: Compute once and cache for reuse by _do_update_list_display
+            self._pending_fingerprint = hash(tuple(
                 (a.get('type', ''), a.get('name', ''), a.get('content', ''), a.get('x', ''), a.get('y', ''), a.get('path', ''))
                 for a in self.actions
             ))
             # Quick check: if action data matches cached version, only update selection
-            if hasattr(self, '_list_fingerprint') and new_fingerprint == self._list_fingerprint:
+            if hasattr(self, '_list_fingerprint') and self._pending_fingerprint == self._list_fingerprint:
                 old_sel = getattr(self, '_last_selected_index', -1)
                 new_sel = getattr(self, 'selected_index', -1)
                 if old_sel != new_sel and self.action_widgets:
@@ -788,11 +791,12 @@ class TabsMixin:
         with self.actions_lock:
             display_actions = list(self.actions)
 
-        # Save fingerprint for fast-path selection updates
-        self._list_fingerprint = hash(tuple(
+        # MED-09 FIX: Reuse fingerprint from update_list_display if available
+        self._list_fingerprint = getattr(self, '_pending_fingerprint', None) or hash(tuple(
             (a.get('type', ''), a.get('name', ''), a.get('content', ''), a.get('x', ''), a.get('y', ''), a.get('path', ''))
             for a in display_actions
         ))
+        self._pending_fingerprint = None
         self._last_selected_index = getattr(self, 'selected_index', -1)
 
         if not display_actions:

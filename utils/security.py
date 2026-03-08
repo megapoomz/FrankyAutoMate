@@ -11,13 +11,13 @@ import hashlib
 import logging
 import base64
 
-# ── Checksum Verification ───────────────────────────────────────────
+from typing import Dict, Optional
 
 # Known good SHA256 hashes for trusted downloads.
 # These are placeholders — verification is a no-op until real hashes are added.
 # To populate: download the file, run `certutil -hashfile <file> SHA256`,
 # and paste the hex string below.
-KNOWN_CHECKSUMS: dict[str, str | None] = {
+KNOWN_CHECKSUMS: Dict[str, Optional[str]] = {
     "tesseract-ocr-w64-setup-5.5.0.20241111.exe": None,  # TODO: Add real SHA256
     "tesseract-ocr-w64-setup-v5.3.0.20221222.exe": None,  # TODO: Add real SHA256
 }

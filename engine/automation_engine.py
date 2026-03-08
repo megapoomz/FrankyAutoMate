@@ -164,6 +164,13 @@ class EngineMixin:
         with self.variable_lock:
             self.variables.clear()
         try:
+            # HIGH-02 FIX: Close any stale mss context before creating a new one
+            old_sct = getattr(self, "sct", None)
+            if old_sct is not None:
+                try:
+                    old_sct.close()
+                except Exception:
+                    pass
             self.sct = mss.mss()
         except Exception:
             self.sct = None
@@ -375,7 +382,7 @@ class EngineMixin:
 
         target_x, target_y = fx, fy
         if self.var_stealth_jitter.get():
-            r = self.var_stealth_jitter_radius.get()
+            r = int(self.var_stealth_jitter_radius.get())  # MED-05 FIX: Round to int
             target_x += random.uniform(-r, r)
             target_y += random.uniform(-r, r)
 
@@ -1077,20 +1084,27 @@ class EngineMixin:
                 if not cache_valid:
                     self._refresh_screenshot_cache(current_time)
 
-        ss = self.screenshot_cache
+        # HIGH-01 FIX: Read cache reference under lock to prevent torn reads
+        with self._screenshot_lock:
+            ss = self.screenshot_cache
 
-        if as_gray:
-            if self._screenshot_gray_cache is not None:
-                ss = self._screenshot_gray_cache
-            else:
-                with self._screenshot_lock:
+            if as_gray:
+                if self._screenshot_gray_cache is not None:
+                    ss = self._screenshot_gray_cache
+                else:
                     if self._screenshot_gray_cache is None:
                         self._screenshot_gray_cache = cv2.cvtColor(ss, cv2.COLOR_RGB2GRAY)
                     ss = self._screenshot_gray_cache
 
         if region:
             rx, ry, rw, rh = region
-            if ry + rh <= ss.shape[0] and rx + rw <= ss.shape[1]:
+            # HIGH-03 FIX: Clamp region to actual screenshot dimensions
+            sh, sw = ss.shape[:2]
+            rx = max(0, min(rx, sw - 1))
+            ry = max(0, min(ry, sh - 1))
+            rw = min(rw, sw - rx)
+            rh = min(rh, sh - ry)
+            if rw > 0 and rh > 0:
                 return ss[ry : ry + rh, rx : rx + rw]
         return ss
 
@@ -1251,7 +1265,7 @@ class EngineMixin:
         # Warn if no region set (OCR on full screen is very slow)
         if not region:
             self.log_message("[WARN] OCR ค้นหาทั้งจอ แนะนำให้กำหนดพื้นที่ (Region) เพื่อความเร็วที่ดีขึ้น", "#f59e0b", level=logging.WARNING)
-        elif region:
+        else:
             # Show debug overlay for region if enabled
             self.show_search_region(region[0], region[1], region[2], region[3])
 
@@ -1410,13 +1424,16 @@ class EngineMixin:
 
     def _cached_imread(self, path: str) -> Optional[np.ndarray]:
         """Consolidated image cache with eviction policy."""
-        if path in self.image_cache:
-            return self.image_cache[path]
+        # MED-02 FIX: Lock to prevent race with preload_images thread
+        with self._screenshot_lock:
+            if path in self.image_cache:
+                return self.image_cache[path]
         try:
             img = cv2.imread(path)
             if img is not None:
-                self.image_cache[path] = img
-                self._maybe_evict_cache()
+                with self._screenshot_lock:
+                    self.image_cache[path] = img
+                    self._maybe_evict_cache()
             return img
         except Exception:
             return None
@@ -1465,20 +1482,24 @@ class EngineMixin:
     def _get_gray_template(self, path: str, bgr_img: np.ndarray) -> Optional[np.ndarray]:
         """Shared grayscale template conversion with instance-level caching."""
         gray_key = (path, "gray")
-        if gray_key not in self.image_cache:
-            if bgr_img is not None and len(bgr_img.shape) == 3:
-                self.image_cache[gray_key] = cv2.cvtColor(bgr_img, cv2.COLOR_BGR2GRAY)
-            else:
-                self.image_cache[gray_key] = bgr_img
-            self._maybe_evict_cache()
-        return self.image_cache[gray_key]
+        with self._screenshot_lock:
+            if gray_key not in self.image_cache:
+                if bgr_img is not None and len(bgr_img.shape) == 3:
+                    self.image_cache[gray_key] = cv2.cvtColor(bgr_img, cv2.COLOR_BGR2GRAY)
+                else:
+                    self.image_cache[gray_key] = bgr_img
+                self._maybe_evict_cache()
+            return self.image_cache[gray_key]
 
     def _maybe_evict_cache(self):
-        """RACE-02 FIX: Thread-safe cache eviction with simple guard."""
+        """RACE-02 FIX: Thread-safe cache eviction — must be called under _screenshot_lock."""
         try:
             if len(self.image_cache) > IMAGE_CACHE_MAX_SIZE:
                 keys_to_remove = list(self.image_cache.keys())[:IMAGE_CACHE_EVICT_COUNT]
                 for k in keys_to_remove:
                     self.image_cache.pop(k, None)  # Use pop to avoid KeyError if concurrent delete
+                    # MED-03 FIX: Also evict corresponding gray template
+                    if isinstance(k, str):
+                        self.image_cache.pop((k, "gray"), None)
         except RuntimeError:
             pass  # Dict size changed during iteration — safe to skip, next call will retry

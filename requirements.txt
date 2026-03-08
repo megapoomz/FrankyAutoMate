@@ -6,7 +6,7 @@ pynput>=1.7.6,<2.0.0
 pywin32>=306
 requests>=2.31.0,<3.0.0
 mss>=9.0.0,<10.0.0
-numpy>=1.24.0,<3.0.0
+numpy>=1.24.0,<2.0.0
 pyperclip>=1.8.2,<2.0.0
 # Optional: OCR support (requires Tesseract binary)
 # pytesseract>=0.3.10,<1.0.0

@@ -27,11 +27,20 @@ class PickerMixin:
             if hasattr(self, '_pick_overlay_timeout') and self._pick_overlay_timeout:
                 self.after_cancel(self._pick_overlay_timeout)
                 self._pick_overlay_timeout = None
+            # HIGH-05 FIX: Release grab before destroy to prevent stuck grabs on multi-monitor
+            try:
+                self.pick_overlay.grab_release()
+            except Exception:
+                pass
             self.pick_overlay.destroy()
             self.deiconify()
             self.calculate_picked_coords()
 
         def on_cancel(event):
+            try:
+                self.pick_overlay.grab_release()
+            except Exception:
+                pass
             self.pick_overlay.destroy()
             self.deiconify()
             self.lbl_status.configure(text="ยกเลิกการเลือกพิกัด", text_color=COLOR_MUTED)
@@ -138,7 +147,7 @@ class PickerMixin:
         self.canvas_reg.bind("<Button-1>", on_press)
         self.canvas_reg.bind("<B1-Motion>", on_drag)
         self.canvas_reg.bind("<ButtonRelease-1>", on_release)
-        self.reg_overlay.bind("<Escape>", lambda e: [self.reg_overlay.destroy(), self.deiconify()])
+        self.reg_overlay.bind("<Escape>", lambda e: [self.reg_overlay.grab_release(), self.reg_overlay.destroy(), self.deiconify()])
         # Auto-destroy with try-except to prevent TclError
         def _auto_close_reg():
             try:
@@ -183,7 +192,7 @@ class PickerMixin:
             self.deiconify()
 
         overlay.bind("<Button-1>", on_overlay_click)
-        overlay.bind("<Escape>", lambda e: [overlay.destroy(), self.deiconify()])
+        overlay.bind("<Escape>", lambda e: [overlay.grab_release(), overlay.destroy(), self.deiconify()])
         # Auto-destroy with try-except to prevent TclError
         def _auto_close_color():
             try:

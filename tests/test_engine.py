@@ -22,6 +22,7 @@ class DummyEngine(EngineMixin):
         self.actions = []
         self.actions_lock = threading.Lock()
         self._label_index_cache = None
+        self._screenshot_lock = threading.Lock()  # Required by lock-protected cache methods
 
     def log_message(self, *args, **kwargs):
         pass

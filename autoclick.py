@@ -365,18 +365,18 @@ class AutoMationApp(
             loaded = 0
             for actions in presets_snapshot:
                 for action in actions:
-                    
-                    if len(self.image_cache) >= IMAGE_CACHE_MAX_SIZE:
-                        return
+                    # P3-06 FIX: Check cache size under lock
+                    with self._screenshot_lock:
+                        if len(self.image_cache) >= IMAGE_CACHE_MAX_SIZE:
+                            return
                     path = action.get("path")
                     if path and path not in self.image_cache:
                         try:
                             img = cv2.imread(path)
                             if img is not None:
-                                # HIGH-03: Use thread-safe pattern — dict assignment is atomic in CPython
-                                # but check-then-set is not. Using simple assignment is safe enough
-                                # since worst case is a redundant cv2.imread, not data corruption.
-                                self.image_cache[path] = img
+                                # P3-01 FIX: Use _screenshot_lock to match _cached_imread pattern
+                                with self._screenshot_lock:
+                                    self.image_cache[path] = img
                                 loaded += 1
                         except Exception:
                             pass
@@ -654,6 +654,11 @@ class AutoMationApp(
                     self.after_cancel(_overlay_timer_holder[0])
                 except Exception:
                     pass
+            # P3-02 FIX: Release grab before destroy
+            try:
+                overlay.grab_release()
+            except Exception:
+                pass
             overlay.destroy()
             self.deiconify()
             hwnd = win32gui.WindowFromPoint((x, y))
@@ -676,7 +681,7 @@ class AutoMationApp(
 
         overlay.bind("<Button-1>", on_click)
         # MED-07: Cancel overlay timer on Escape to prevent stale timer callbacks
-        overlay.bind("<Escape>", lambda e: [self._cancel_timer(_overlay_timer_holder[0]), overlay.destroy(), self.deiconify()])
+        overlay.bind("<Escape>", lambda e: [self._cancel_timer(_overlay_timer_holder[0]), overlay.grab_release(), overlay.destroy(), self.deiconify()])
 
         def _auto_close_overlay():
             try:

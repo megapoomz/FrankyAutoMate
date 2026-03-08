@@ -188,7 +188,7 @@ class ActionMixin:
             self.deiconify()
 
         overlay.bind("<Button-1>", on_click)
-        overlay.bind("<Escape>", lambda e: [overlay.destroy(), self.deiconify()])
+        overlay.bind("<Escape>", lambda e: [overlay.grab_release(), overlay.destroy(), self.deiconify()])
 
         def _focus_mc():
             overlay.lift()
