@@ -1,0 +1,12 @@
+customtkinter
+pyautogui
+opencv-python
+pillow
+pynput
+pywin32
+requests
+wmi
+psutil
+mss
+numpy
+pyperclip

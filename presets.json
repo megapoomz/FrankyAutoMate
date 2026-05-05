@@ -1,0 +1,29 @@
+[
+  {
+    "name": "ggg",
+    "hotkey": "<97>",
+    "actions": [
+      {
+        "type": "click",
+        "x": 308,
+        "y": 17,
+        "button": "left",
+        "relative": true,
+        "mode": "background",
+        "stop_after": false
+      },
+      {
+        "type": "text",
+        "content": "555"
+      }
+    ],
+    "loop_count": 1,
+    "target_hwnd": null,
+    "target_title": "รับชมวิดีโอที่เป็นกระแสสำหรับคุณ | TikTok - MEGAFRANK - Microsoft​ Edge",
+    "stealth_move": false,
+    "stealth_jitter": false,
+    "stealth_jitter_radius": 3.0,
+    "stealth_timing": false,
+    "stealth_timing_val": 0.2
+  }
+]
