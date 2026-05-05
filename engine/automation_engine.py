@@ -654,8 +654,12 @@ class EngineMixin:
                 win32gui.PostMessage(h, win32con.WM_MOUSEMOVE, 0, lp)
                 win32gui.PostMessage(h, d, w, lp)
                 
-                # Hold duration
-                time.sleep(random.uniform(0.06, 0.10)) 
+                # High precision hold duration
+                hold_time = random.uniform(0.08, 0.15)
+                start_t = time.perf_counter()
+                while time.perf_counter() - start_t < hold_time:
+                    pass
+                    
                 win32gui.PostMessage(h, u, 0, lp)
 
             if button == "double":

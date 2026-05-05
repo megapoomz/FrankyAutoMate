@@ -45,7 +45,13 @@ def send_input_click(x, y, button="left"):
         
     def _do_click():
         ctypes.windll.user32.SendInput(1, ctypes.byref(down_input), ctypes.sizeof(INPUT))
-        time.sleep(random.uniform(0.03, 0.08))
+        
+        # High precision hold duration to prevent missed clicks
+        hold_time = random.uniform(0.06, 0.12)
+        start_t = time.perf_counter()
+        while time.perf_counter() - start_t < hold_time:
+            pass
+            
         ctypes.windll.user32.SendInput(1, ctypes.byref(up_input), ctypes.sizeof(INPUT))
 
     _do_click()
