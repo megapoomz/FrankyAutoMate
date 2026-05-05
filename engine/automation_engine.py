@@ -391,6 +391,17 @@ class EngineMixin:
                         win32gui.PostMessage(target, win32con.WM_KEYUP, 0x11, 0xC01D0001)   
                         return
                     except: pass
+                    
+                # Special Handler 2: Native Copy/Paste/Cut via Messages
+                if keys_clean in ["ctrl+c", "^c"]:
+                    win32gui.PostMessage(target, 0x0301, 0, 0) # WM_COPY
+                    return
+                if keys_clean in ["ctrl+v", "^v"]:
+                    win32gui.PostMessage(target, 0x0302, 0, 0) # WM_PASTE
+                    return
+                if keys_clean in ["ctrl+x", "^x"]:
+                    win32gui.PostMessage(target, 0x0300, 0, 0) # WM_CUT
+                    return
 
                 # Special Handler 2: DELETE / BACKSPACE
                 vk_map = {
@@ -404,7 +415,12 @@ class EngineMixin:
                 vk = vk_map.get(keys_clean)
                 if vk:
                     win32gui.PostMessage(target, win32con.WM_KEYDOWN, vk, 0)
-                    time.sleep(0.05)
+                    
+                    hold_time = random.uniform(0.06, 0.10)
+                    start_t = time.perf_counter()
+                    while time.perf_counter() - start_t < hold_time:
+                        pass
+                        
                     win32gui.PostMessage(target, win32con.WM_KEYUP, vk, 0)
                     return
                 
@@ -416,7 +432,12 @@ class EngineMixin:
                      vk = vk_map.get(k.strip())
                      if vk:
                          win32gui.PostMessage(target, win32con.WM_KEYDOWN, vk, 0)
-                         time.sleep(0.02)
+                         
+                         hold_time = random.uniform(0.06, 0.10)
+                         start_t = time.perf_counter()
+                         while time.perf_counter() - start_t < hold_time:
+                             pass
+                             
                          win32gui.PostMessage(target, win32con.WM_KEYUP, vk, 0)
             return
 
@@ -424,7 +445,19 @@ class EngineMixin:
         time.sleep(0.03)
         keys = [k.strip().lower() for k in key.split('+')]
         keys = ["ctrl" if k in ["control", "ctlr"] else k for k in keys]
-        pyautogui.hotkey(*keys)
+        
+        for k in keys:
+            pyautogui.keyDown(k)
+            
+        # Precise hold duration
+        hold_time = random.uniform(0.06, 0.10)
+        start_t = time.perf_counter()
+        while time.perf_counter() - start_t < hold_time:
+            pass
+            
+        for k in reversed(keys):
+            pyautogui.keyUp(k)
+            
         time.sleep(0.03)
 
     def _execute_wait(self, action: Dict[str, Any]) -> None:
