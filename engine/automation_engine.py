@@ -446,17 +446,23 @@ class EngineMixin:
         keys = [k.strip().lower() for k in key.split('+')]
         keys = ["ctrl" if k in ["control", "ctlr"] else k for k in keys]
         
+        from utils.win32_input import send_hardware_key
+        
+        # Press all keys down using hardware scan codes
         for k in keys:
-            pyautogui.keyDown(k)
+            if not send_hardware_key(k, down=True):
+                pyautogui.keyDown(k) # Fallback to virtual keys if not in map
             
-        # Precise hold duration
+        # Precise hold duration (60-100ms for DirectInput recognition)
         hold_time = random.uniform(0.06, 0.10)
         start_t = time.perf_counter()
         while time.perf_counter() - start_t < hold_time:
             pass
             
+        # Release all keys in reverse order
         for k in reversed(keys):
-            pyautogui.keyUp(k)
+            if not send_hardware_key(k, down=False):
+                pyautogui.keyUp(k)
             
         time.sleep(0.03)
 
