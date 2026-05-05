@@ -78,6 +78,23 @@ class TabsMixin:
         self.btn_record_key.pack(side="right")
         ToolTip(self.btn_record_key, "กดเพื่อเริ่มอัดปุ่มคีย์บอร์ด")
         
+        # Row 1.5: Quick Shortcuts
+        f_quick = ctk.CTkFrame(t, fg_color="transparent")
+        f_quick.pack(fill="x", padx=15, pady=(0, 5))
+        
+        def add_quick_key(keys):
+            self.entry_text.delete(0, "end")
+            self.entry_text.insert(0, keys)
+            self.var_input_mode.set("hotkey")
+            self.add_type_action()
+            
+        ctk.CTkButton(f_quick, text="ก็อป (Ctrl+C)", command=lambda: add_quick_key("ctrl+c"), 
+                      fg_color=COLOR_INNER, hover_color=COLOR_CARD, border_width=1, border_color=BORDER_COLOR, height=28, width=90, font=("Tahoma", 11)).pack(side="left", padx=(0, 5))
+        ctk.CTkButton(f_quick, text="วาง (Ctrl+V)", command=lambda: add_quick_key("ctrl+v"), 
+                      fg_color=COLOR_INNER, hover_color=COLOR_CARD, border_width=1, border_color=BORDER_COLOR, height=28, width=90, font=("Tahoma", 11)).pack(side="left", padx=5)
+        ctk.CTkButton(f_quick, text="Enter", command=lambda: add_quick_key("enter"), 
+                      fg_color=COLOR_INNER, hover_color=COLOR_CARD, border_width=1, border_color=BORDER_COLOR, height=28, width=60, font=("Tahoma", 11)).pack(side="left", padx=5)
+        
         # Mode
         # Row 2: Options + Add Button
         f_opts = ctk.CTkFrame(t, fg_color="transparent")
