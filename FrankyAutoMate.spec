@@ -10,7 +10,6 @@ a = Analysis(
     binaries=[],
     datas=[
         (os.path.join(customtkinter_path, 'assets'), 'customtkinter/assets'),
-        (os.path.join(customtkinter_path, 'themes'), 'customtkinter/themes'),
     ],
     hiddenimports=[],
     hookspath=[],
