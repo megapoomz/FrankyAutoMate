@@ -35,6 +35,7 @@ if %errorlevel% neq 0 (
 
 :: 2. Cleanup
 echo [1/4] Cleaning up previous build...
+taskkill /f /im FrankyAutoMate.exe >nul 2>nul
 if exist build rmdir /s /q build
 if exist dist rmdir /s /q dist
 
