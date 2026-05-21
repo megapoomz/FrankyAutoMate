@@ -346,6 +346,10 @@ class EngineMixin:
         button = action["button"]
         is_rel = action.get("relative", False)
         
+        # --- Focus recovery BEFORE coordinate conversion ---
+        if mode == "normal" and self.target_hwnd and win32gui.IsWindow(self.target_hwnd):
+            self.force_foreground(self.target_hwnd)
+            
         target_x, target_y = fx, fy
         if self.var_stealth_jitter.get():
             r = self.var_stealth_jitter_radius.get()
@@ -385,12 +389,7 @@ class EngineMixin:
 
         # Normal/Foreground Logic
         if self.target_hwnd and win32gui.IsWindow(self.target_hwnd):
-            # Always try to focus before typing if possible
-            try:
-                if win32gui.GetForegroundWindow() != self.target_hwnd:
-                    win32gui.SetForegroundWindow(self.target_hwnd)
-                    time.sleep(0.2)
-            except: pass
+            self.force_foreground(self.target_hwnd)
             
         # Execute typing using the most robust method available
         if self.var_stealth_sendinput.get():
@@ -505,6 +504,8 @@ class EngineMixin:
             return
 
         # Normal Mode
+        if self.target_hwnd and win32gui.IsWindow(self.target_hwnd):
+            self.force_foreground(self.target_hwnd)
         time.sleep(0.03)
         keys = [k.strip().lower() for k in key.split('+')]
         keys = ["ctrl" if k in ["control", "ctlr"] else k for k in keys]
@@ -780,6 +781,52 @@ class EngineMixin:
             if self.var_debug_mode.get(): print(f"[BG CLICK ERR] {e}")
             pass
 
+    def force_foreground(self, hwnd):
+        """Ultra-robust method to un-minimize and force a target window to foreground"""
+        if not hwnd or not win32gui.IsWindow(hwnd):
+            return False
+        try:
+            # 1. Un-minimize if iconic/minimized
+            if win32gui.IsIconic(hwnd):
+                win32gui.ShowWindow(hwnd, 9) # SW_RESTORE
+                time.sleep(0.15) # Wait for restore animation
+
+            # 2. Check if already foreground
+            fore_hwnd = win32gui.GetForegroundWindow()
+            if fore_hwnd == hwnd:
+                return True
+
+            # 3. Use thread input attachment to bypass Windows focus restrictions
+            import win32process, win32api
+            fore_thread = win32process.GetWindowThreadProcessId(fore_hwnd)[0]
+            cur_thread = win32api.GetCurrentThreadId()
+
+            if fore_thread != cur_thread:
+                win32process.AttachThreadInput(cur_thread, fore_thread, True)
+                try:
+                    win32gui.SetForegroundWindow(hwnd)
+                    win32gui.BringWindowToTop(hwnd)
+                finally:
+                    win32process.AttachThreadInput(cur_thread, fore_thread, False)
+            else:
+                win32gui.SetForegroundWindow(hwnd)
+                win32gui.BringWindowToTop(hwnd)
+
+            time.sleep(0.08) # Focus stabilization
+            return win32gui.GetForegroundWindow() == hwnd
+        except Exception:
+            # Fallback bypass using ALT key simulation
+            try:
+                import win32api
+                win32api.keybd_event(18, 0, 0, 0) # Alt down
+                win32gui.SetForegroundWindow(hwnd)
+                win32gui.BringWindowToTop(hwnd)
+                win32api.keybd_event(18, 0, 2, 0) # Alt up
+                time.sleep(0.08)
+                return win32gui.GetForegroundWindow() == hwnd
+            except:
+                return False
+
     def perform_click(self, x, y, button="left", mode="normal"):
         """Centralized click method handling stealth, dry-run, and background modes"""
         # Dry Run Check
@@ -797,39 +844,32 @@ class EngineMixin:
         # Normal/Stealth Mode
         self.show_click_marker(x, y)
         
-        # Stealth Movement
+        # --- Normal Mode Focus Recovery ---
+        if mode == "normal" and self.target_hwnd and win32gui.IsWindow(self.target_hwnd):
+            self.force_foreground(self.target_hwnd)
+        
         if self.var_stealth_move.get():
             self._human_move(x, y)
         
-        # --- Normal Mode Focus Recovery ---
-        if mode == "normal" and self.target_hwnd and win32gui.IsWindow(self.target_hwnd):
-            try:
-                if win32gui.GetForegroundWindow() != self.target_hwnd:
-                    win32api.keybd_event(18, 0, 0, 0)
-                    win32gui.SetForegroundWindow(self.target_hwnd)
-                    win32api.keybd_event(18, 0, 2, 0)
-                    time.sleep(0.08) # Focus stabilization
-            except: pass
-        
         if self.var_stealth_sendinput.get():
-             if mode != "background": # Explicitly ensure we don't mix up
-                 send_input_click(x, y, button)
+            if mode != "background": # Explicitly ensure we don't mix up
+                send_input_click(x, y, button)
         else:
+            py_btn = "left" if button == "double" else button
             if self.var_stealth_move.get():
-                 # For stealth move, we utilize human_move then click
-                 pyautogui.mouseDown(button=button)
-                 time.sleep(random.uniform(0.05, 0.15))
-                 pyautogui.mouseUp(button=button)
-                 if button == "double":
-                     time.sleep(0.06)
-                     pyautogui.mouseDown(button=button)
-                     time.sleep(random.uniform(0.05, 0.15))
-                     pyautogui.mouseUp(button=button)
+                pyautogui.mouseDown(button=py_btn)
+                time.sleep(random.uniform(0.05, 0.15))
+                pyautogui.mouseUp(button=py_btn)
+                if button == "double":
+                    time.sleep(0.06)
+                    pyautogui.mouseDown(button=py_btn)
+                    time.sleep(random.uniform(0.05, 0.15))
+                    pyautogui.mouseUp(button=py_btn)
             else:
                 if button == "double":
-                     pyautogui.doubleClick(x, y)
+                    pyautogui.doubleClick(x, y)
                 else:
-                     pyautogui.click(x, y, button=button)
+                    pyautogui.click(x, y, button=button)
 
 
     def get_cached_screenshot(self, region=None):

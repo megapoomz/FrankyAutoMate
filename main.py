@@ -19,6 +19,15 @@ from autoclick import AutoMationApp
 
 def main():
     """Start the Franky AutoMate application"""
+    import ctypes
+    try:
+        ctypes.windll.shcore.SetProcessDpiAwareness(1) # PROCESS_SYSTEM_DPI_AWARE
+    except Exception:
+        try:
+            ctypes.windll.user32.SetProcessDPIAware()
+        except Exception:
+            pass
+
     app = AutoMationApp()
     app.mainloop()
 

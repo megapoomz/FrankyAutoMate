@@ -543,5 +543,14 @@ class AutoMationApp(ctk.CTk, HotkeyMixin, PresetMixin, EngineMixin, ActionMixin,
         overlay.focus_force()
 
 if __name__ == "__main__":
+    import ctypes
+    try:
+        ctypes.windll.shcore.SetProcessDpiAwareness(1) # PROCESS_SYSTEM_DPI_AWARE
+    except Exception:
+        try:
+            ctypes.windll.user32.SetProcessDPIAware()
+        except Exception:
+            pass
+
     app = AutoMationApp()
     app.mainloop()
