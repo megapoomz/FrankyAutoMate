@@ -6,12 +6,19 @@ customtkinter_path = os.path.dirname(customtkinter.__file__)
 
 a = Analysis(
     ['main.py'],
-    pathex=[],
+    pathex=['.'],
     binaries=[],
     datas=[
         (os.path.join(customtkinter_path, 'assets'), 'customtkinter/assets'),
     ],
-    hiddenimports=[],
+    hiddenimports=[
+        'ui', 'engine', 'core', 'utils',
+        'ui.picker_mixin', 'ui.stealth_mixin', 'ui.tabs_mixin', 
+        'ui.ui_mixin', 'ui.variables_mixin', 'ui.vision_mixin', 
+        'ui.update_window', 'engine.action_mixin', 'engine.automation_engine', 
+        'engine.hotkey_engine', 'engine.logic_mixin', 'engine.preset_manager', 
+        'core.constants', 'utils.win32_input', 'utils.dep_installer'
+    ],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
@@ -41,4 +48,5 @@ exe = EXE(
     codesign_identity=None,
     entitlements_file=None,
     icon=['icon.ico'],
+    uac_admin=True,
 )

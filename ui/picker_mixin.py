@@ -1,10 +1,11 @@
 import customtkinter as ctk
 import pyautogui
 import win32gui
+import win32api
 from core.constants import COLOR_ACCENT, COLOR_BG, COLOR_WARNING, COLOR_MUTED, COLOR_SUCCESS, COLOR_DANGER, GRADIENT_END, GRADIENT_START
 
 class PickerMixin:
-    """Handles screen picking logic for coordinates, regions, and colors"""
+    """Handles screen picking logic for coordinates, regions, and colors with physical coordinate precision"""
     
     def start_pick_location(self):
         self.lbl_status.configure(text="โหมดเลือกพิกัด: หน้าจอจะมืดลงสักครู่ คลิกจุดที่ต้องการ...", text_color=COLOR_ACCENT)
@@ -14,8 +15,10 @@ class PickerMixin:
         self.pick_overlay.configure(fg_color="black", cursor="crosshair")
         
         def on_overlay_click(event):
-            self.picked_x_raw = event.x_root
-            self.picked_y_raw = event.y_root
+            # Using win32api to get the absolute physical cursor position at click time
+            px, py = win32api.GetCursorPos()
+            self.picked_x_raw = px
+            self.picked_y_raw = py
             self.pick_overlay.destroy()
             self.deiconify()
             self.calculate_picked_coords()
@@ -59,7 +62,6 @@ class PickerMixin:
         self.reg_overlay = ctk.CTkToplevel(self)
         self.reg_overlay.attributes('-fullscreen', True, '-alpha', 0.3, '-topmost', True)
         self.reg_overlay.configure(fg_color="black")
-        self.reg_overlay.configure(fg_color="black")
         
         def _focus_reg():
             self.reg_overlay.lift()
@@ -70,11 +72,16 @@ class PickerMixin:
         try: self.reg_overlay.configure(cursor="cross") 
         except: pass
         self.start_x = self.start_y = None
+        self.start_x_physical = self.start_y_physical = None
         self.rect_id = None
         self.canvas_reg = ctk.CTkCanvas(self.reg_overlay, bg="black", highlightthickness=0)
         self.canvas_reg.pack(fill="both", expand=True)
 
         def on_press(event):
+            # Record absolute physical starting cursor position
+            px, py = win32api.GetCursorPos()
+            self.start_x_physical = px
+            self.start_y_physical = py
             self.start_x, self.start_y = event.x, event.y
             if self.rect_id: self.canvas_reg.delete(self.rect_id)
             self.rect_id = self.canvas_reg.create_rectangle(self.start_x, self.start_y, self.start_x, self.start_y, outline="red", width=2)
@@ -84,11 +91,12 @@ class PickerMixin:
 
         def on_release(event):
             try:
-                ex, ey = event.x, event.y
+                # Record absolute physical ending cursor position
+                px, py = win32api.GetCursorPos()
                 self.reg_overlay.destroy()
                 self.deiconify()
-                x1, x2 = min(self.start_x, ex), max(self.start_x, ex)
-                y1, y2 = min(self.start_y, ey), max(self.start_y, ey)
+                x1, x2 = min(self.start_x_physical, px), max(self.start_x_physical, px)
+                y1, y2 = min(self.start_y_physical, py), max(self.start_y_physical, py)
                 w, h = x2 - x1, y2 - y1
                 if w > 5 and h > 5:
                     self.current_region = (x1, y1, w, h)
@@ -115,7 +123,7 @@ class PickerMixin:
         overlay.configure(fg_color="black", cursor="crosshair")
         
         def on_overlay_click(event):
-            ax, ay = event.x_root, event.y_root
+            ax, ay = win32api.GetCursorPos()
             try:
                 rgb = pyautogui.pixel(ax, ay)
                 self.current_color_data = (ax, ay, rgb)

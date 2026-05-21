@@ -15,7 +15,7 @@ set VERSION=!VERSION:"=!
 set VERSION=!VERSION: =!
 
 if "!VERSION!"=="" (
-    echo [ERROR] Could not extract version from autoclick.py
+    echo [ERROR] Could not extract version from core\constants.py
     pause
     exit /b 1
 )

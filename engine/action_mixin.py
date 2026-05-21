@@ -145,9 +145,11 @@ class ActionMixin:
         overlay.configure(fg_color="black", cursor="crosshair")
         def on_click(event):
             try:
-                rgb = pyautogui.pixel(event.x_root, event.y_root)
+                import win32api
+                px, py = win32api.GetCursorPos()
+                rgb = pyautogui.pixel(px, py)
                 if not hasattr(self, 'temp_multi_points'): self.temp_multi_points = []
-                self.temp_multi_points.append({"x": event.x_root, "y": event.y_root, "rgb": rgb, "tolerance": 10})
+                self.temp_multi_points.append({"x": px, "y": py, "rgb": rgb, "tolerance": 10})
                 self.lbl_multi_color_count.configure(text=f"จุดที่เก็บไว้: {len(self.temp_multi_points)} จุด")
             except: pass
             overlay.destroy()

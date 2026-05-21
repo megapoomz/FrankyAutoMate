@@ -6,6 +6,7 @@ import logging
 import random
 import json
 import webbrowser
+import ctypes
 from typing import Dict, Any, List, Optional
 
 import customtkinter as ctk
@@ -96,7 +97,7 @@ class AutoMationApp(ctk.CTk, HotkeyMixin, PresetMixin, EngineMixin, ActionMixin,
         self.var_stealth_timing_val = ctk.DoubleVar(value=0.2)
         self.var_stealth_hide_window = ctk.BooleanVar(value=False)
         self.var_stealth_random_title = ctk.BooleanVar(value=False)
-        self.var_stealth_sendinput = ctk.BooleanVar(value=True)
+        self.var_stealth_sendinput = ctk.BooleanVar(value=False)
         self.var_show_overlay = ctk.BooleanVar(value=True)
         self.var_img_conf = ctk.DoubleVar(value=0.75)
         self.original_title = f"Franky AutoMate v{APP_VERSION}"
@@ -127,10 +128,20 @@ class AutoMationApp(ctk.CTk, HotkeyMixin, PresetMixin, EngineMixin, ActionMixin,
         
         if not is_admin():
             import tkinter.messagebox as messagebox
-            messagebox.showwarning("Admin Privilege Required", 
-                "โปรแกรมไม่ได้เปิดด้วยสิทธิ์ Administrator!\n\n"
-                "อาจทำให้การทำงานบางส่วน (เช่น การส่งปุ่ม/เมาส์ ไปยังเกม หรือ Hotkey) ทำงานไม่สมบูรณ์\n\n"
-                "กรุณาปิดโปรแกรมแล้วคลิกขวาเลือก 'Run as administrator' เพื่อความเสถียร 100%")
+            ans = messagebox.askyesno("ต้องใช้สิทธิ์ Administrator",
+                "โปรแกรมจำเป็นต้องทำงานด้วยสิทธิ์ Administrator เพื่อส่งคลิก/คีย์บอร์ดไปยังทุกหน้าต่างอย่างเสถียร 100%\n\n"
+                "ต้องการให้โปรแกรมเปิดใหม่ด้วยสิทธิ์ Administrator ตอนนี้เลยใช่หรือไม่?", parent=self)
+            if ans:
+                try:
+                    script = os.path.abspath(sys.argv[0])
+                    params = " ".join([f'"{arg}"' for arg in sys.argv[1:]])
+                    if getattr(sys, 'frozen', False):
+                        ctypes.windll.shell32.ShellExecuteW(None, "runas", sys.executable, params, None, 1)
+                    else:
+                        ctypes.windll.shell32.ShellExecuteW(None, "runas", sys.executable, f'"{script}" {params}', None, 1)
+                    sys.exit(0)
+                except Exception as e:
+                    messagebox.showerror("Error", f"ไม่สามารถยกระดับสิทธิ์ได้: {e}", parent=self)
                 
         self.lbl_status.configure(text="ระบบพร้อมทำงาน", text_color=COLOR_SUCCESS)
         # Auto-check for updates after 3 seconds
@@ -418,7 +429,7 @@ class AutoMationApp(ctk.CTk, HotkeyMixin, PresetMixin, EngineMixin, ActionMixin,
         overlay.configure(fg_color="black", cursor="hand2")
         
         def on_click(event):
-            x, y = event.x_root, event.y_root
+            x, y = win32api.GetCursorPos()
             overlay.destroy()
             self.deiconify()
             hwnd = win32gui.WindowFromPoint((x, y))

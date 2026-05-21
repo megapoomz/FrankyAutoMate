@@ -62,7 +62,7 @@ class PresetMixin:
             self.var_stealth_timing.set(preset.get("stealth_timing", False))
             self.var_stealth_timing_val.set(preset.get("stealth_timing_val", 0.2))
             self.var_show_overlay.set(preset.get("show_overlay", True))
-            self.var_stealth_sendinput.set(preset.get("stealth_sendinput", True))
+            self.var_stealth_sendinput.set(preset.get("stealth_sendinput", False))
             
             self.update_list_display()
 

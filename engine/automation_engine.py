@@ -119,7 +119,19 @@ class EngineMixin:
                 # 2. Ensure context focus (If a target is locked/followed)
                 if self.target_hwnd and win32gui.IsWindow(self.target_hwnd):
                     try:
-                        if win32gui.GetForegroundWindow() != self.target_hwnd:
+                        fw = win32gui.GetForegroundWindow()
+                        is_child_or_self = False
+                        if fw:
+                            if fw == self.target_hwnd:
+                                is_child_or_self = True
+                            else:
+                                try:
+                                    ancestor = win32gui.GetAncestor(fw, win32con.GA_ROOTOWNER)
+                                    if ancestor == self.target_hwnd:
+                                        is_child_or_self = True
+                                except:
+                                    pass
+                        if not is_child_or_self:
                             # Use Alt-key trick but with minimal delay during steps
                             win32api.keybd_event(18, 0, 0, 0)
                             win32gui.SetForegroundWindow(self.target_hwnd)
@@ -147,7 +159,19 @@ class EngineMixin:
                     # Recover focus to target window if using foreground methods
                     if self.target_hwnd and win32gui.IsWindow(self.target_hwnd):
                         try:
-                            if win32gui.GetForegroundWindow() != self.target_hwnd:
+                            fw = win32gui.GetForegroundWindow()
+                            is_child_or_self = False
+                            if fw:
+                                if fw == self.target_hwnd:
+                                    is_child_or_self = True
+                                else:
+                                    try:
+                                        ancestor = win32gui.GetAncestor(fw, win32con.GA_ROOTOWNER)
+                                        if ancestor == self.target_hwnd:
+                                            is_child_or_self = True
+                                    except:
+                                        pass
+                            if not is_child_or_self:
                                 win32api.keybd_event(18, 0, 0, 0)
                                 win32gui.SetForegroundWindow(self.target_hwnd)
                                 win32api.keybd_event(18, 0, 2, 0)
@@ -631,75 +655,41 @@ class EngineMixin:
                 else: self.perform_click(click_x, click_y, button=btn, mode=cm)
         else: self.log_message(f"[FAIL] เงื่อนไขสีไม่ตรง ({logic})")
 
-    def find_child_window_at_point(self, parent_hwnd, client_x, client_y):
-        """Find the deepest child window at client coordinates (client_x, client_y) inside parent_hwnd,
-        without using the screen-space WindowFromPoint (which fails when window is covered)."""
-        curr_hwnd = parent_hwnd
-        curr_x, curr_y = client_x, client_y
-        
-        while True:
-            try:
-                child_hwnd = win32gui.ChildWindowFromPoint(curr_hwnd, (int(curr_x), int(curr_y)))
-                if not child_hwnd or child_hwnd == curr_hwnd:
-                    break
-                
-                # Convert client coordinates from curr_hwnd to child_hwnd
-                screen_pt = win32gui.ClientToScreen(curr_hwnd, (int(curr_x), int(curr_y)))
-                curr_x, curr_y = win32gui.ScreenToClient(child_hwnd, screen_pt)
-                curr_hwnd = child_hwnd
-            except Exception:
-                break
-                
-        return curr_hwnd
-
     def do_background_click(self, x, y, button="left"):
-        """Refined background click: Finds specific child windows recursively without screen occlusion issues"""
+        """Refined background click: Finds specific child windows for better compatibility"""
+        # If no target Locked, try to find window at point
         target_hwnd = getattr(self, 'target_hwnd', None)
         try:
-            # 1. Identify the specific sub-window (control)
-            if target_hwnd and win32gui.IsWindow(target_hwnd):
-                # Target is locked: map screen coords to client coords of the target window
-                cx, cy = win32gui.ScreenToClient(target_hwnd, (int(x), int(y)))
-                target = self.find_child_window_at_point(target_hwnd, cx, cy)
-            else:
-                # Target is not locked (Global): Fallback to WindowFromPoint but then descend
-                real_hwnd = win32gui.WindowFromPoint((int(x), int(y)))
-                if real_hwnd:
-                    root_hwnd = real_hwnd
-                    while True:
-                        parent = win32gui.GetParent(root_hwnd)
-                        if not parent:
-                            break
-                        root_hwnd = parent
-                    cx, cy = win32gui.ScreenToClient(root_hwnd, (int(x), int(y)))
-                    target = self.find_child_window_at_point(root_hwnd, cx, cy)
-                else:
-                    target = None
-
-            if not target:
-                return
+            # 1. Identify the specific sub-window (control) at this screen coordinate
+            real_hwnd = win32gui.WindowFromPoint((int(x), int(y)))
+            
+            # Safety: Ensure the found window is the target or a descendant of it
+            is_descendant = False
+            curr = real_hwnd
+            if target_hwnd:
+                while curr:
+                    if curr == target_hwnd:
+                        is_descendant = True
+                        break
+                    curr = win32gui.GetParent(curr)
+            
+            # If target_hwnd set, only allow clicking it or its children.
+            # If target_hwnd is None (Global), allow clicking any window found at point.
+            target = real_hwnd if (is_descendant or not target_hwnd) else target_hwnd
             
             # Store for subsequent typing actions
             self.last_child_hwnd = target
             
-            # 2. Coordinate conversion to the specific target HWND client space
+            # 2. Coordinate conversion to the specific target HWND
             try:
                 cx, cy = win32gui.ScreenToClient(target, (int(x), int(y)))
             except:
-                # Fallback to manual if ScreenToClient fails
+                # Fallback to manual if ScreenToClient fails (rare)
                 rect = win32gui.GetWindowRect(target)
                 cx, cy = int(x) - rect[0], int(y) - rect[1]
                 
             lParam = win32api.MAKELONG(cx, cy)
             
-            # Find the root parent window to send activation messages
-            root_parent = target
-            while True:
-                p = win32gui.GetParent(root_parent)
-                if not p:
-                    break
-                root_parent = p
-
             # 3. Message Sequence for High Compatibility (Client Area Only)
             is_right = (button == "right")
             btn_down = win32con.WM_RBUTTONDOWN if is_right else win32con.WM_LBUTTONDOWN
@@ -707,22 +697,23 @@ class EngineMixin:
             wparam = win32con.MK_RBUTTON if is_right else win32con.MK_LBUTTON
             
             def _send_single(h, d, u, w, lp):
-                # Ensure the main top-level window is active/focused
-                win32gui.PostMessage(root_parent, win32con.WM_ACTIVATE, win32con.WA_ACTIVE, 0)
-                # Send focus message to the child control
+                # Ensure the control is active/focused
+                win32gui.PostMessage(h, win32con.WM_ACTIVATE, win32con.WA_ACTIVE, 0)
                 win32gui.PostMessage(h, win32con.WM_SETFOCUS, 0, 0)
                 
-                # Send mouse activate message to top level
-                win32gui.PostMessage(root_parent, win32con.WM_MOUSEACTIVATE, root_parent, win32api.MAKELONG(win32con.HTCLIENT, d))
+                # Clean-up: Send an UP message first
+                win32gui.PostMessage(h, u, 0, lp)
+                time.sleep(0.02)
                 
-                # Move cursor and click
                 win32gui.PostMessage(h, win32con.WM_SETCURSOR, h, win32api.MAKELONG(win32con.HTCLIENT, d))
                 win32gui.PostMessage(h, win32con.WM_MOUSEMOVE, 0, lp)
                 win32gui.PostMessage(h, d, w, lp)
                 
                 # High precision hold duration
                 hold_time = random.uniform(0.08, 0.15)
-                precise_sleep(hold_time)
+                start_t = time.perf_counter()
+                while time.perf_counter() - start_t < hold_time:
+                    pass
                     
                 win32gui.PostMessage(h, u, 0, lp)
 
@@ -761,53 +752,39 @@ class EngineMixin:
         # Normal/Stealth Mode
         self.show_click_marker(x, y)
         
-        # --- Normal Mode Restoration & Focus Recovery ---
-        if mode == "normal":
-            hwnd_to_focus = self.target_hwnd
-            if not hwnd_to_focus:
-                try:
-                    hwnd_at_pt = win32gui.WindowFromPoint((int(x), int(y)))
-                    if hwnd_at_pt:
-                        hwnd_to_focus = win32gui.GetAncestor(hwnd_at_pt, win32con.GA_ROOT)
-                except:
-                    pass
-            
-            if hwnd_to_focus and win32gui.IsWindow(hwnd_to_focus):
-                try:
-                    # If window is minimized (iconic), restore it first
-                    if win32gui.IsIconic(hwnd_to_focus):
-                        win32gui.ShowWindow(hwnd_to_focus, win32con.SW_RESTORE)
-                        time.sleep(0.15) # Wait for restore animation
-                    
-                    if win32gui.GetForegroundWindow() != hwnd_to_focus:
-                        win32api.keybd_event(18, 0, 0, 0)
-                        win32gui.SetForegroundWindow(hwnd_to_focus)
-                        win32api.keybd_event(18, 0, 2, 0)
-                        time.sleep(0.15) # Focus stabilization
-                except: pass
-
         # Stealth Movement
         if self.var_stealth_move.get():
             self._human_move(x, y)
+        
+        # --- Normal Mode Focus Recovery ---
+        if mode == "normal" and self.target_hwnd and win32gui.IsWindow(self.target_hwnd):
+            try:
+                if win32gui.GetForegroundWindow() != self.target_hwnd:
+                    win32api.keybd_event(18, 0, 0, 0)
+                    win32gui.SetForegroundWindow(self.target_hwnd)
+                    win32api.keybd_event(18, 0, 2, 0)
+                    time.sleep(0.08) # Focus stabilization
+            except: pass
         
         if self.var_stealth_sendinput.get():
              if mode != "background": # Explicitly ensure we don't mix up
                  send_input_click(x, y, button)
         else:
-             # Use explicit mouseDown/mouseUp with hold time for maximum compatibility instead of instant clicks
-             click_btn = "left" if button == "double" else button
-             if button == "double":
-                  pyautogui.mouseDown(x=x, y=y, button=click_btn)
-                  time.sleep(random.uniform(0.06, 0.12))
-                  pyautogui.mouseUp(x=x, y=y, button=click_btn)
-                  time.sleep(random.uniform(0.04, 0.08))
-                  pyautogui.mouseDown(x=x, y=y, button=click_btn)
-                  time.sleep(random.uniform(0.06, 0.12))
-                  pyautogui.mouseUp(x=x, y=y, button=click_btn)
-             else:
-                  pyautogui.mouseDown(x=x, y=y, button=click_btn)
-                  time.sleep(random.uniform(0.06, 0.12))
-                  pyautogui.mouseUp(x=x, y=y, button=click_btn)
+            if self.var_stealth_move.get():
+                 # For stealth move, we utilize human_move then click
+                 pyautogui.mouseDown(button=button)
+                 time.sleep(random.uniform(0.05, 0.15))
+                 pyautogui.mouseUp(button=button)
+                 if button == "double":
+                     time.sleep(0.06)
+                     pyautogui.mouseDown(button=button)
+                     time.sleep(random.uniform(0.05, 0.15))
+                     pyautogui.mouseUp(button=button)
+            else:
+                if button == "double":
+                     pyautogui.doubleClick(x, y)
+                else:
+                     pyautogui.click(x, y, button=button)
 
 
     def get_cached_screenshot(self, region=None):
