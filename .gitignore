@@ -21,6 +21,7 @@ Output/
 # App artifacts
 *.log
 automate.log
+mypy_report.txt
 config.json
 *.zip
 
