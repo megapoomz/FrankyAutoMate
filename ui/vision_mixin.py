@@ -21,8 +21,8 @@ class VisionMixin:
         self.entry_ocr_text.pack(side="left", fill="x", expand=True)
         
         f_row2 = ctk.CTkFrame(f_ocr, fg_color="transparent")
-        f_row2.pack(fill="x", padx=15, pady=(0, 15))
-        ctk.CTkLabel(f_row2, text="โหมด:", font=("Tahoma", 12)).pack(side="left", padx=(0, 10))
+        f_row2.pack(fill="x", padx=15, pady=(0, 5))
+        ctk.CTkLabel(f_row2, text="โหมดค้นหา:", font=("Tahoma", 12)).pack(side="left", padx=(0, 10))
         self.var_ocr_mode = ctk.StringVar(value="wait")
         ctk.CTkOptionMenu(f_row2, values=["wait", "once"], variable=self.var_ocr_mode, width=120, fg_color="#1e293b").pack(side="left")
         
@@ -30,14 +30,17 @@ class VisionMixin:
         self.cb_ocr_click = ctk.CTkCheckBox(f_row2, text="คลิกเมื่อพบ", variable=self.var_ocr_click_val, font=("Tahoma", 11))
         self.cb_ocr_click.pack(side="left", padx=15)
         
-        ctk.CTkLabel(f_row2, text="ปุ่ม:", font=("Tahoma", 11), text_color=COLOR_MUTED).pack(side="left", padx=5)
-        self.var_ocr_click_btn = ctk.StringVar(value="left")
-        menu_btn = ctk.CTkOptionMenu(f_row2, values=["left", "right", "double"], variable=self.var_ocr_click_btn, width=80, fg_color="#334155")
-        menu_btn.pack(side="left")
+        f_row3 = ctk.CTkFrame(f_ocr, fg_color="transparent")
+        f_row3.pack(fill="x", padx=15, pady=(0, 15))
 
-        ctk.CTkLabel(f_row2, text="โหมด:", font=("Tahoma", 11), text_color=COLOR_MUTED).pack(side="left", padx=(10, 5))
+        ctk.CTkLabel(f_row3, text="ปุ่มเมาส์:", font=("Tahoma", 11), text_color=COLOR_MUTED).pack(side="left", padx=(0, 5))
+        self.var_ocr_click_btn = ctk.StringVar(value="left")
+        menu_btn = ctk.CTkOptionMenu(f_row3, values=["left", "right", "double"], variable=self.var_ocr_click_btn, width=90, fg_color="#334155")
+        menu_btn.pack(side="left", padx=(0, 15))
+
+        ctk.CTkLabel(f_row3, text="โหมดคลิก:", font=("Tahoma", 11), text_color=COLOR_MUTED).pack(side="left", padx=(0, 5))
         self.var_ocr_click_mode = ctk.StringVar(value="normal")
-        menu_mode = ctk.CTkOptionMenu(f_row2, values=["normal", "background"], variable=self.var_ocr_click_mode, width=100, fg_color="#334155")
+        menu_mode = ctk.CTkOptionMenu(f_row3, values=["normal", "background"], variable=self.var_ocr_click_mode, width=110, fg_color="#334155")
         menu_mode.pack(side="left")
 
         # Region selector for OCR (Very important for performance)

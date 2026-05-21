@@ -232,6 +232,58 @@ class AutoMationApp(ctk.CTk, HotkeyMixin, PresetMixin, EngineMixin, ActionMixin,
         self.geometry("1180x880")
         self.minsize(1100, 800)
         self.configure(fg_color=COLOR_BG)
+
+        # Set AppUserModelID so Windows taskbar displays correct icon when running from source
+        try:
+            import ctypes
+            myappid = f"megapoomz.frankyautomate.app.{APP_VERSION}"
+            ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(myappid)
+        except Exception:
+            pass
+
+        # Resolve asset path for Window Icon (both frozen/unfrozen)
+        if getattr(sys, 'frozen', False):
+            base_dir = getattr(sys, '_MEIPASS', os.path.dirname(os.path.abspath(__file__)))
+        else:
+            base_dir = os.path.dirname(os.path.abspath(__file__))
+        
+        self.icon_path_ico = os.path.join(base_dir, "icon.ico")
+        self.icon_path_png = os.path.join(base_dir, "icon.png")
+
+        # Set the icon immediately and also defer it with after() to guarantee persistence
+        self.set_app_icon()
+        self.after(200, self.set_app_icon)
+        self.after(1000, self.set_app_icon) # Extra insurance for delayed window rendering
+
+    def set_app_icon(self):
+        """Set taskbar and titlebar icon with multiple fallbacks and timing workarounds"""
+        try:
+            import ctypes
+            myappid = f"megapoomz.frankyautomate.app.{APP_VERSION}"
+            ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(myappid)
+        except Exception:
+            pass
+
+        # Try setting the icon using iconbitmap (.ico)
+        if hasattr(self, 'icon_path_ico') and os.path.exists(self.icon_path_ico):
+            try:
+                self.iconbitmap(self.icon_path_ico)
+            except Exception as e:
+                try:
+                    self.wm_iconbitmap(self.icon_path_ico)
+                except Exception:
+                    pass
+
+        # Also set iconphoto (.png) sequentially to ensure taskbar and window titlebar display correctly on all Windows environments
+        if hasattr(self, 'icon_path_png') and os.path.exists(self.icon_path_png):
+            try:
+                from PIL import Image, ImageTk
+                img = Image.open(self.icon_path_png)
+                photo = ImageTk.PhotoImage(img)
+                self.iconphoto(True, photo)
+                self._icon_photo_ref = photo  # Prevent garbage collection
+            except Exception as ex:
+                pass
         
         # Main Layout
         self.grid_columnconfigure(0, weight=1) # List area
@@ -269,25 +321,64 @@ class AutoMationApp(ctk.CTk, HotkeyMixin, PresetMixin, EngineMixin, ActionMixin,
         self.scroll_right = ctk.CTkScrollableFrame(f_right, fg_color="transparent", corner_radius=0)
         self.scroll_right.pack(fill="both", expand=True, padx=5, pady=5)
 
-        # Tabs for actions (Inside scrollable)
-        self.tabs = ctk.CTkTabview(self.scroll_right, fg_color="transparent", 
-                                   segmented_button_selected_color=COLOR_ACCENT, 
-                                   segmented_button_unselected_color="#1e293b", 
-                                   segmented_button_fg_color="#0f172a")
-        # Custom font for tab buttons
-        self.tabs._segmented_button.configure(font=("Tahoma", 11, "bold"))
-        self.tabs.pack(fill="x", padx=5, pady=5)
+        # Main Tabview with 4 premium categories (Inside scrollable)
+        self.main_tabs = ctk.CTkTabview(self.scroll_right, fg_color="transparent", 
+                                        segmented_button_selected_color=COLOR_ACCENT, 
+                                        segmented_button_unselected_color="#1e293b", 
+                                        segmented_button_fg_color="#0f172a")
+        self.main_tabs._segmented_button.configure(font=("Tahoma", 11, "bold"))
+        self.main_tabs.pack(fill="x", padx=5, pady=5)
+
+        tab_actions_group = self.main_tabs.add("🛠️ การทำงาน (Actions)")
+        tab_detection_group = self.main_tabs.add("🔍 การตรวจจับ (Detection)")
+        tab_logic_group = self.main_tabs.add("🧠 ตรรกะ & ตัวแปร (Logic)")
+        tab_settings_group = self.main_tabs.add("⚙️ ระบบ & ตั้งค่า (System)")
+
+        # Group 1: Actions Sub-tabview
+        tabs_actions = ctk.CTkTabview(tab_actions_group, fg_color="transparent",
+                                      segmented_button_selected_color=COLOR_ACCENT,
+                                      segmented_button_unselected_color="#0f172a",
+                                      segmented_button_fg_color="#1e293b")
+        tabs_actions._segmented_button.configure(font=("Tahoma", 10, "bold"))
+        tabs_actions.pack(fill="x", padx=0, pady=0)
         
-        self.tab_click = self.tabs.add("Mouse")
-        self.tab_type = self.tabs.add("Type")
-        self.tab_image = self.tabs.add("Image")
-        self.tab_color = self.tabs.add("Color")
-        self.tab_wait = self.tabs.add("Wait")
-        self.tab_vars = self.tabs.add("Vars")
-        self.tab_vision = self.tabs.add("Vision")
-        self.tab_logic = self.tabs.add("Logic")
-        self.tab_stealth = self.tabs.add("Stealth")
-        self.tab_log = self.tabs.add("Log")
+        self.tab_click = tabs_actions.add("🖱️ Mouse")
+        self.tab_type = tabs_actions.add("⌨️ Type")
+        self.tab_wait = tabs_actions.add("⏱️ Wait")
+
+        # Group 2: Detection Sub-tabview
+        tabs_detection = ctk.CTkTabview(tab_detection_group, fg_color="transparent",
+                                        segmented_button_selected_color=COLOR_ACCENT,
+                                        segmented_button_unselected_color="#0f172a",
+                                        segmented_button_fg_color="#1e293b")
+        tabs_detection._segmented_button.configure(font=("Tahoma", 10, "bold"))
+        tabs_detection.pack(fill="x", padx=0, pady=0)
+        
+        self.tab_image = tabs_detection.add("🖼️ Image")
+        self.tab_color = tabs_detection.add("🎨 Color")
+        self.tab_vision = tabs_detection.add("👁️ Vision")
+
+        # Group 3: Logic & Variables Sub-tabview
+        tabs_logic = ctk.CTkTabview(tab_logic_group, fg_color="transparent",
+                                    segmented_button_selected_color=COLOR_ACCENT,
+                                    segmented_button_unselected_color="#0f172a",
+                                    segmented_button_fg_color="#1e293b")
+        tabs_logic._segmented_button.configure(font=("Tahoma", 10, "bold"))
+        tabs_logic.pack(fill="x", padx=0, pady=0)
+        
+        self.tab_vars = tabs_logic.add("💾 Vars")
+        self.tab_logic = tabs_logic.add("❓ Logic")
+
+        # Group 4: Stealth & Logs Sub-tabview
+        tabs_settings = ctk.CTkTabview(tab_settings_group, fg_color="transparent",
+                                       segmented_button_selected_color=COLOR_ACCENT,
+                                       segmented_button_unselected_color="#0f172a",
+                                       segmented_button_fg_color="#1e293b")
+        tabs_settings._segmented_button.configure(font=("Tahoma", 10, "bold"))
+        tabs_settings.pack(fill="x", padx=0, pady=0)
+        
+        self.tab_stealth = tabs_settings.add("🛡️ Stealth")
+        self.tab_log = tabs_settings.add("📋 Log")
         
         self.setup_click_tab()
         self.setup_type_tab()

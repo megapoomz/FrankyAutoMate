@@ -52,22 +52,22 @@ class LogicMixin:
         self.btn_logic_source_action.pack(side="right", padx=10, pady=5)
         
         f_if_row2 = ctk.CTkFrame(f_if, fg_color="transparent")
-        f_if_row2.pack(fill="x", padx=15, pady=(5, 15))
+        f_if_row2.pack(fill="x", padx=15, pady=(5, 10))
         
         # Structure Mode Selection
         ctk.CTkLabel(f_if_row2, text="รูปแบบ (Structure):", font=("Tahoma", 12)).pack(side="left", padx=(0, 10))
         self.var_logic_struct = ctk.StringVar(value="Block (IF)")
         self.opt_logic_struct = ctk.CTkOptionMenu(f_if_row2, variable=self.var_logic_struct, 
-                                                  values=["Jump Only", "Block (IF)", "Block (IF/ELSE)"],
-                                                  command=self.update_logic_struct_ui, width=140)
+                                                   values=["Jump Only", "Block (IF)", "Block (IF/ELSE)"],
+                                                   command=self.update_logic_struct_ui, width=140)
         self.opt_logic_struct.pack(side="left")
         ToolTip(self.opt_logic_struct, "เลือกรูปแบบโครงสร้างเงื่อนไข")
         
         # Target Label (Only for Jump Mode)
-        self.f_target_label = ctk.CTkFrame(f_if_row2, fg_color="transparent")
-        self.f_target_label.pack(side="left", padx=10)
-        ctk.CTkLabel(self.f_target_label, text="ข้ามไปที่:", font=("Tahoma", 12)).pack(side="left", padx=(5, 5))
-        self.opt_logic_target = ctk.CTkOptionMenu(self.f_target_label, values=self.logic_label_list, height=32, fg_color="#0f172a", width=130)
+        self.f_target_label = ctk.CTkFrame(f_if, fg_color="transparent")
+        self.f_target_label.pack(fill="x", padx=15, pady=(0, 10))
+        ctk.CTkLabel(self.f_target_label, text="ข้ามไปที่:", font=("Tahoma", 12)).pack(side="left", padx=(0, 10))
+        self.opt_logic_target = ctk.CTkOptionMenu(self.f_target_label, values=self.logic_label_list, height=32, fg_color="#0f172a", width=140)
         self.opt_logic_target.pack(side="left")
         
         self.after(500, lambda: [self.update_logic_source_ui(), self.update_logic_struct_ui()]) # Init UI
@@ -245,7 +245,7 @@ class LogicMixin:
         if not hasattr(self, 'f_target_label'): return
         mode = self.var_logic_struct.get()
         if mode == "Jump Only":
-            self.f_target_label.pack(side="left", padx=10)
+            self.f_target_label.pack(fill="x", padx=15, pady=(0, 10))
         else:
             self.f_target_label.pack_forget()
 

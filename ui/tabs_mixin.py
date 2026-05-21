@@ -31,12 +31,11 @@ class TabsMixin:
         f_grid = ctk.CTkFrame(t, fg_color=COLOR_INNER, corner_radius=8, border_width=1, border_color=BORDER_COLOR)
         f_grid.pack(fill="x", padx=15, pady=5)
         
-        # Row 1: Left = Click Mode, Right = Button
+        # Row 1: Click Mode Selection
         f_r1 = ctk.CTkFrame(f_grid, fg_color="transparent")
-        f_r1.pack(fill="x", padx=15, pady=(15, 5))
+        f_r1.pack(fill="x", padx=15, pady=(12, 4))
         
-        # Mode
-        ctk.CTkLabel(f_r1, text="โหมด:", font=("Tahoma", 12), text_color=COLOR_MUTED).pack(side="left", padx=(0, 5))
+        ctk.CTkLabel(f_r1, text="โหมดการคลิก:", font=("Tahoma", 12), text_color=COLOR_MUTED).pack(side="left", padx=(0, 10))
         self.var_click_mode = ctk.StringVar(value="normal")
         rb_norm = ctk.CTkRadioButton(f_r1, text="ปกติ", variable=self.var_click_mode, value="normal", font=("Tahoma", 12), width=90)
         rb_norm.pack(side="left", padx=5)
@@ -44,11 +43,14 @@ class TabsMixin:
         rb_bg.pack(side="left", padx=5)
         ToolTip(rb_bg, "⚠️ โหมดเบื้องหลัง: ส่งคำสั่งตรงเข้าโปรแกรม (ไม่ต้องมีหน้าต่างโฟกัส)\n❌ อาจใช้ไม่ได้กับ: เว็บเบราว์เซอร์, เกมรุ่นใหม่ หรือโปรแกรมที่รันด้วยสิทธิ์ Admin")
 
-        # Button (Right Side)
-        ctk.CTkLabel(f_r1, text="ปุ่ม:", font=("Tahoma", 12), text_color=COLOR_MUTED).pack(side="right", padx=(10, 5))
+        # Row 2: Mouse Button Selector
+        f_r2 = ctk.CTkFrame(f_grid, fg_color="transparent")
+        f_r2.pack(fill="x", padx=15, pady=(4, 12))
+        
+        ctk.CTkLabel(f_r2, text="ปุ่มเมาส์:", font=("Tahoma", 12), text_color=COLOR_MUTED).pack(side="left", padx=(0, 10))
         self.var_click_btn = ctk.StringVar(value="left")
-        menu_btn = ctk.CTkOptionMenu(f_r1, variable=self.var_click_btn, values=["left", "right", "middle", "double"], width=90, height=28, fg_color=COLOR_CARD, button_color=COLOR_INNER)
-        menu_btn.pack(side="right")
+        menu_btn = ctk.CTkOptionMenu(f_r2, variable=self.var_click_btn, values=["left", "right", "middle", "double"], width=120, height=28, fg_color=COLOR_CARD, button_color=COLOR_INNER)
+        menu_btn.pack(side="left")
         
         # Row 3: Options + Add Button
         f_act = ctk.CTkFrame(t, fg_color="transparent")
@@ -95,32 +97,42 @@ class TabsMixin:
         ctk.CTkButton(f_quick, text="Enter", command=lambda: add_quick_key("enter"), 
                       fg_color=COLOR_INNER, hover_color=COLOR_CARD, border_width=1, border_color=BORDER_COLOR, height=28, width=60, font=("Tahoma", 11)).pack(side="left", padx=5)
         
-        # Mode
-        # Row 2: Options + Add Button
-        f_opts = ctk.CTkFrame(t, fg_color="transparent")
-        f_opts.pack(fill="x", padx=15, pady=5)
+        # Row 2: Config Options Card
+        f_opts_card = ctk.CTkFrame(t, fg_color=COLOR_INNER, corner_radius=8, border_width=1, border_color=BORDER_COLOR)
+        f_opts_card.pack(fill="x", padx=15, pady=5)
         
-        # Left: Mode & Type (Compact)
-        f_vars = ctk.CTkFrame(f_opts, fg_color="transparent")
-        f_vars.pack(side="left")
-        
+        # Row 1: Typing Mode (Normal / BG)
+        f_t_mode = ctk.CTkFrame(f_opts_card, fg_color="transparent")
+        f_t_mode.pack(fill="x", padx=15, pady=(12, 4))
+        ctk.CTkLabel(f_t_mode, text="โหมดพิมพ์:", font=("Tahoma", 12), text_color=COLOR_MUTED).pack(side="left", padx=(0, 10))
         self.var_type_mode = ctk.StringVar(value="normal")
-        ctk.CTkRadioButton(f_vars, text="ปกติ", variable=self.var_type_mode, value="normal", font=("Tahoma", 11), width=80).pack(side="left", padx=2)
-        ctk.CTkRadioButton(f_vars, text="BG", variable=self.var_type_mode, value="background", font=("Tahoma", 11), width=70).pack(side="left", padx=2)
+        rb_norm_type = ctk.CTkRadioButton(f_t_mode, text="ปกติ", variable=self.var_type_mode, value="normal", font=("Tahoma", 12), width=90)
+        rb_norm_type.pack(side="left", padx=5)
+        rb_bg_type = ctk.CTkRadioButton(f_t_mode, text="เบื้องหลัง (BG)", variable=self.var_type_mode, value="background", font=("Tahoma", 12))
+        rb_bg_type.pack(side="left", padx=5)
         
-        ctk.CTkFrame(f_vars, width=1, height=20, fg_color=BORDER_COLOR).pack(side="left", padx=5) # Divider
-        
+        # Row 2: Input Type (Text / Key)
+        f_i_mode = ctk.CTkFrame(f_opts_card, fg_color="transparent")
+        f_i_mode.pack(fill="x", padx=15, pady=(4, 12))
+        ctk.CTkLabel(f_i_mode, text="ประเภทข้อมูล:", font=("Tahoma", 12), text_color=COLOR_MUTED).pack(side="left", padx=(0, 10))
         self.var_input_mode = ctk.StringVar(value="text")
-        ctk.CTkRadioButton(f_vars, text="Text", variable=self.var_input_mode, value="text", font=("Tahoma", 11), width=80).pack(side="left", padx=2)
-        ctk.CTkRadioButton(f_vars, text="Key", variable=self.var_input_mode, value="hotkey", font=("Tahoma", 11), width=70).pack(side="left", padx=2)
+        rb_txt_input = ctk.CTkRadioButton(f_i_mode, text="ข้อความ (Text)", variable=self.var_input_mode, value="text", font=("Tahoma", 12), width=110)
+        rb_txt_input.pack(side="left", padx=5)
+        rb_key_input = ctk.CTkRadioButton(f_i_mode, text="ปุ่มกด (Key)", variable=self.var_input_mode, value="hotkey", font=("Tahoma", 12))
+        rb_key_input.pack(side="left", padx=5)
 
+        # Row 3: Action Controls
+        f_act = ctk.CTkFrame(t, fg_color="transparent")
+        f_act.pack(fill="x", padx=15, pady=10)
+        
         self.var_type_stop = ctk.BooleanVar(value=False)
-        ctk.CTkCheckBox(f_opts, text="จบงานทันที", variable=self.var_type_stop,
-                        font=("Tahoma", 11), text_color=COLOR_MUTED, border_color=BORDER_COLOR, width=20, height=20).pack(side="left", padx=(10, 0))
+        cb_stop = ctk.CTkCheckBox(f_act, text="จบงานทันที (Stop After)", variable=self.var_type_stop,
+                        font=("Tahoma", 11), text_color=COLOR_MUTED, border_color=BORDER_COLOR, checkmark_color="white", width=20, height=20)
+        cb_stop.pack(side="left")
 
         # Right: Add Button
-        ctk.CTkButton(f_opts, text="เพิ่ม (Add)", command=self.add_type_action, 
-                      fg_color=COLOR_SUCCESS, hover_color="#059669", height=32, width=80, font=("Tahoma", 12, "bold")).pack(side="right")
+        ctk.CTkButton(f_act, text="เพิ่ม (Add)", command=self.add_type_action, 
+                      fg_color=COLOR_SUCCESS, hover_color="#059669", height=32, width=100, font=("Tahoma", 12, "bold")).pack(side="right")
 
     def setup_image_tab(self):
         t = self.tab_image
@@ -137,12 +149,9 @@ class TabsMixin:
         
         
         ctk.CTkLabel(t, text="2. ตั้งค่าพิกัดการหา (Config)", font=("Tahoma", 12, "bold"), text_color=COLOR_MUTED).pack(pady=(15, 5), anchor="center")
-        f_sub_row = ctk.CTkFrame(t, fg_color="transparent")
-        f_sub_row.pack(fill="x", padx=15, pady=0)
-        
-        # Region
-        f_reg = ctk.CTkFrame(f_sub_row, fg_color=COLOR_INNER, corner_radius=12, border_width=1, border_color=BORDER_COLOR)
-        f_reg.pack(side="left", fill="both", expand=True, padx=(0, 5))
+        # Region (Full Width)
+        f_reg = ctk.CTkFrame(t, fg_color=COLOR_INNER, corner_radius=12, border_width=1, border_color=BORDER_COLOR)
+        f_reg.pack(fill="x", padx=15, pady=(5, 10))
         ctk.CTkLabel(f_reg, text="ขอบเขตหา (Region)", font=("Tahoma", 11, "bold"), text_color=COLOR_ACCENT).pack(pady=(10, 5))
         self.btn_pick_region = ctk.CTkButton(f_reg, text="ตีกรอบหน้าจอ", command=self.start_pick_region, fg_color=GRADIENT_END, hover_color=GRADIENT_START, height=32, font=("Tahoma", 11, "bold"))
         self.btn_pick_region.pack(pady=(0, 10), padx=15, fill="x")
@@ -150,21 +159,25 @@ class TabsMixin:
         self.lbl_region_info.pack(pady=(0, 10))
         ToolTip(self.btn_pick_region, "จำกัดพื้นที่ค้นหาเพื่อให้ทำงานเร็วขึ้น (ถ้าไม่เลือกจะหาทั้งจอ)")
         
-        # Offset
+        # 2-Column Row for Offset & Confidence
+        f_sub_row = ctk.CTkFrame(t, fg_color="transparent")
+        f_sub_row.pack(fill="x", padx=15, pady=0)
+        
+        # Offset (Column 1)
         f_off = ctk.CTkFrame(f_sub_row, fg_color=COLOR_INNER, corner_radius=12, border_width=1, border_color=BORDER_COLOR)
-        f_off.pack(side="left", fill="both", expand=True, padx=(5, 0))
+        f_off.pack(side="left", fill="both", expand=True, padx=(0, 5))
         ctk.CTkLabel(f_off, text="จุดคลิก X,Y (Offset)", font=("Tahoma", 11, "bold"), text_color=COLOR_ACCENT).pack(pady=(10, 5))
         f_off_row = ctk.CTkFrame(f_off, fg_color="transparent")
         f_off_row.pack(pady=(0, 10))
-        self.entry_off_x = ctk.CTkEntry(f_off_row, width=80, height=32, placeholder_text="X", font=("JetBrains Mono", 11), fg_color=COLOR_BG, border_color=BORDER_COLOR, justify="center")
+        self.entry_off_x = ctk.CTkEntry(f_off_row, width=65, height=32, placeholder_text="X", font=("JetBrains Mono", 11), fg_color=COLOR_BG, border_color=BORDER_COLOR, justify="center")
         self.entry_off_x.insert(0, "0")
-        self.entry_off_x.pack(side="left", padx=5)
-        self.entry_off_y = ctk.CTkEntry(f_off_row, width=80, height=32, placeholder_text="Y", font=("JetBrains Mono", 11), fg_color=COLOR_BG, border_color=BORDER_COLOR, justify="center")
+        self.entry_off_x.pack(side="left", padx=3)
+        self.entry_off_y = ctk.CTkEntry(f_off_row, width=65, height=32, placeholder_text="Y", font=("JetBrains Mono", 11), fg_color=COLOR_BG, border_color=BORDER_COLOR, justify="center")
         self.entry_off_y.insert(0, "0")
-        self.entry_off_y.pack(side="left", padx=5)
+        self.entry_off_y.pack(side="left", padx=3)
         ToolTip(self.entry_off_x, "เลื่อนจุดคลิกห่างจากกลางภาพไปทางซ้าย/ขวา (พิกเซล)")
         
-        # Confidence
+        # Confidence (Column 2)
         f_conf = ctk.CTkFrame(f_sub_row, fg_color=COLOR_INNER, corner_radius=12, border_width=1, border_color=BORDER_COLOR)
         f_conf.pack(side="left", fill="both", expand=True, padx=(5, 0))
         lbl_conf_head = ctk.CTkLabel(f_conf, text="ความแม่นยำ (75%)", font=("Tahoma", 11, "bold"), text_color=COLOR_ACCENT)
@@ -177,42 +190,50 @@ class TabsMixin:
         self.slider_conf.pack(pady=(5, 10), padx=15, fill="x")
         ToolTip(self.slider_conf, "ปรับความแม่นยำในการค้นหา (0.5 - 1.0) แนะนำ 0.95+ สำหรับแยกแยะกล่องติ๊กถูก")
         
-        # Last Configs
-        f_last = ctk.CTkFrame(t, fg_color="transparent")
-        f_last.pack(fill="x", padx=15, pady=10)
+        # Structured Vertical Option Card
+        f_img_opts = ctk.CTkFrame(t, fg_color=COLOR_INNER, corner_radius=12, border_width=1, border_color=BORDER_COLOR)
+        f_img_opts.pack(fill="x", padx=15, pady=10)
         
+        # Row 1: Checkbox Options
+        f_img_r1 = ctk.CTkFrame(f_img_opts, fg_color="transparent")
+        f_img_r1.pack(fill="x", padx=15, pady=(12, 4))
         self.var_img_click = ctk.BooleanVar(value=True)
         self.var_img_stop = ctk.BooleanVar(value=False)
-        cb_click = ctk.CTkCheckBox(f_last, text="เจอแล้วคลิก", variable=self.var_img_click, font=("Tahoma", 11))
-        cb_click.pack(side="left", padx=(5, 10))
-        cb_stop = ctk.CTkCheckBox(f_last, text="จบหลังเจอเดี๋ยวนั้น", variable=self.var_img_stop, font=("Tahoma", 11))
-        cb_stop.pack(side="left", padx=5)
+        cb_click = ctk.CTkCheckBox(f_img_r1, text="เจอแล้วคลิก", variable=self.var_img_click, font=("Tahoma", 11))
+        cb_click.pack(side="left", padx=(0, 10))
+        cb_stop = ctk.CTkCheckBox(f_img_r1, text="จบหลังเจอเดี๋ยวนั้น", variable=self.var_img_stop, font=("Tahoma", 11))
+        cb_stop.pack(side="left")
         
+        # Row 2: Search Mode & Image Mode Dropdowns
+        f_img_r2 = ctk.CTkFrame(f_img_opts, fg_color="transparent")
+        f_img_r2.pack(fill="x", padx=15, pady=4)
+        
+        ctk.CTkLabel(f_img_r2, text="โหมดค้นหา:", font=("Tahoma", 11), text_color=COLOR_MUTED).pack(side="left", padx=(0, 5))
         self.var_img_search_mode = ctk.StringVar(value="wait")
-        menu_search_mode = ctk.CTkOptionMenu(f_last, variable=self.var_img_search_mode, values=["wait", "once"], width=80, fg_color=COLOR_CARD, button_color=COLOR_INNER)
-        menu_search_mode.pack(side="left", padx=5)
+        menu_search_mode = ctk.CTkOptionMenu(f_img_r2, variable=self.var_img_search_mode, values=["wait", "once"], width=80, fg_color=COLOR_CARD, button_color=COLOR_INNER)
+        menu_search_mode.pack(side="left", padx=(0, 10))
         ToolTip(menu_search_mode, "โหมดค้นหา:\nwait = รอจนกว่าจะเจอรูป (วนค้นหาไม่หยุด)\nonce = เช็คครั้งเดียว ไม่เจอก็ไปขั้นต่อไป")
         
+        ctk.CTkLabel(f_img_r2, text="โหมดสีภาพ:", font=("Tahoma", 11), text_color=COLOR_MUTED).pack(side="left", padx=(0, 5))
         self.var_img_mode = ctk.StringVar(value="color")
-        menu_mode = ctk.CTkOptionMenu(f_last, variable=self.var_img_mode, values=["color", "grayscale"], width=90)
-        menu_mode.pack(side="left", padx=5)
+        menu_mode = ctk.CTkOptionMenu(f_img_r2, variable=self.var_img_mode, values=["color", "grayscale"], width=100, fg_color=COLOR_CARD, button_color=COLOR_INNER)
+        menu_mode.pack(side="left")
         ToolTip(menu_mode, "โหมดภาพ: สีปกติ หรือ ขาวดำ (ขาวดำอาจหาเจอได้ง่ายกว่าในบางเกม)")
         
-        # Button & Mode Row
-        f_img_btns = ctk.CTkFrame(t, fg_color="transparent")
-        f_img_btns.pack(fill="x", padx=15, pady=5)
+        # Row 3: Click Button & Click Mode Dropdowns
+        f_img_r3 = ctk.CTkFrame(f_img_opts, fg_color="transparent")
+        f_img_r3.pack(fill="x", padx=15, pady=(4, 12))
         
-        ctk.CTkLabel(f_img_btns, text="ปุ่ม:", font=("Tahoma", 11), text_color=COLOR_MUTED).pack(side="left", padx=5)
+        ctk.CTkLabel(f_img_r3, text="ปุ่มเมาส์:", font=("Tahoma", 11), text_color=COLOR_MUTED).pack(side="left", padx=(0, 5))
         self.var_img_click_btn = ctk.StringVar(value="left")
-        menu_btn = ctk.CTkOptionMenu(f_img_btns, variable=self.var_img_click_btn, values=["left", "right", "double"], width=80, fg_color=COLOR_CARD, button_color=COLOR_INNER)
-        menu_btn.pack(side="left", padx=2)
+        menu_btn = ctk.CTkOptionMenu(f_img_r3, variable=self.var_img_click_btn, values=["left", "right", "double"], width=80, fg_color=COLOR_CARD, button_color=COLOR_INNER)
+        menu_btn.pack(side="left", padx=(0, 10))
         
-        ctk.CTkLabel(f_img_btns, text="โหมด:", font=("Tahoma", 11), text_color=COLOR_MUTED).pack(side="left", padx=(10, 5))
+        ctk.CTkLabel(f_img_r3, text="โหมดคลิก:", font=("Tahoma", 11), text_color=COLOR_MUTED).pack(side="left", padx=(0, 5))
         self.var_img_click_mode = ctk.StringVar(value="normal")
-        menu_mode = ctk.CTkOptionMenu(f_img_btns, variable=self.var_img_click_mode, values=["normal", "background"], width=100, fg_color=COLOR_CARD, button_color=COLOR_INNER)
-        menu_mode.pack(side="left", padx=2)
-        
-        ToolTip(menu_mode, "โหมดการคลิก: หน้าจอปกติ หรือ พื้นหลัง (BG)")
+        menu_click_mode = ctk.CTkOptionMenu(f_img_r3, variable=self.var_img_click_mode, values=["normal", "background"], width=110, fg_color=COLOR_CARD, button_color=COLOR_INNER)
+        menu_click_mode.pack(side="left")
+        ToolTip(menu_click_mode, "โหมดการคลิก: หน้าจอปกติ หรือ พื้นหลัง (BG)")
         
         ctk.CTkButton(t, text="เพิ่มคำสั่ง (Add)", command=self.add_image_action, 
                        fg_color=COLOR_SUCCESS, hover_color="#059669", height=50, font=("Tahoma", 14, "bold")).pack(pady=10, padx=20, fill="x")
@@ -249,37 +270,47 @@ class TabsMixin:
         self.entry_tol.pack(pady=(5, 10))
         ToolTip(self.entry_tol, "ใส่ค่าเลข 0-255\nค่าเทานี้จะยอมให้สีเพี้ยนไปจากต้นฉบับได้แค่ไหน\n(ค่าน้อย = ต้องเหมือนเป๊ะ, ค่ามาก = ยืดหยุ่น)")
         
-        # Extra Settings
-        f_conf = ctk.CTkFrame(t, fg_color="transparent")
-        f_conf.pack(fill="x", padx=15, pady=10)
+        # Structured Vertical Option Card for Color Tab
+        f_color_opts = ctk.CTkFrame(t, fg_color=COLOR_INNER, corner_radius=12, border_width=1, border_color=BORDER_COLOR)
+        f_color_opts.pack(fill="x", padx=15, pady=10)
         
+        # Row 1: Checkbox Options
+        f_col_r1 = ctk.CTkFrame(f_color_opts, fg_color="transparent")
+        f_col_r1.pack(fill="x", padx=15, pady=(12, 4))
         self.var_color_click = ctk.BooleanVar(value=True)
-        cb_click = ctk.CTkCheckBox(f_conf, text="เจอแล้วคลิก", variable=self.var_color_click, font=("Tahoma", 11))
-        cb_click.pack(side="left", padx=(5, 10))
+        cb_click = ctk.CTkCheckBox(f_col_r1, text="เจอแล้วคลิก", variable=self.var_color_click, font=("Tahoma", 11))
+        cb_click.pack(side="left", padx=(0, 15))
         ToolTip(cb_click, "คลิกที่จุดที่เจอสีนั้นทันที")
         
-        # New variable for Button Selection
-        self.var_color_click_btn = ctk.StringVar(value="left")
-        ctk.CTkOptionMenu(f_conf, variable=self.var_color_click_btn, values=["left", "right", "double"], width=70).pack(side="left", padx=5)
-        
-        # Mode Selection
-        self.var_color_mode = ctk.StringVar(value="once") # behavior: once/wait
-        ctk.CTkOptionMenu(f_conf, variable=self.var_color_mode, values=["once", "wait"], width=70).pack(side="left", padx=5)
-        
-        # Click Mode (Normal/Background)
-        self.var_color_click_mode = ctk.StringVar(value="normal")
-        
-        ctk.CTkRadioButton(f_conf, text="ปกติ", variable=self.var_color_click_mode, value="normal", font=("Tahoma", 11)).pack(side="right", padx=5)
-        # Shortened text to prevent overflow
-        rb_bg_color = ctk.CTkRadioButton(f_conf, text="เบื้องหลัง (BG)", variable=self.var_color_click_mode, value="background", font=("Tahoma", 11))
-        rb_bg_color.pack(side="right", padx=5)
-        ToolTip(rb_bg_color, "⚠️ ส่งคำสั่งคลิกเบื้องหลัง (ไม่เลื่อนเมาส์)\n⚠️ ปลายทางอาจบล็อกคำสั่งนี้หากเป็นเบราว์เซอร์หรือเกม")
-
         self.var_color_stop = ctk.BooleanVar(value=False)
-        f_color_act = ctk.CTkFrame(t, fg_color="transparent")
-        f_color_act.pack(fill="x", padx=15, pady=0)
-        ctk.CTkCheckBox(f_color_act, text="จบงานทันที (Stop After)", variable=self.var_color_stop,
-                        font=("Tahoma", 11), text_color=COLOR_MUTED, border_color=BORDER_COLOR, width=20, height=20).pack(side="left", padx=5)
+        cb_stop = ctk.CTkCheckBox(f_col_r1, text="จบงานทันที (Stop After)", variable=self.var_color_stop, font=("Tahoma", 11))
+        cb_stop.pack(side="left")
+        
+        # Row 2: Button selection & Search mode dropdowns
+        f_col_r2 = ctk.CTkFrame(f_color_opts, fg_color="transparent")
+        f_col_r2.pack(fill="x", padx=15, pady=4)
+        
+        ctk.CTkLabel(f_col_r2, text="ปุ่มเมาส์:", font=("Tahoma", 11), text_color=COLOR_MUTED).pack(side="left", padx=(0, 5))
+        self.var_color_click_btn = ctk.StringVar(value="left")
+        menu_btn = ctk.CTkOptionMenu(f_col_r2, variable=self.var_color_click_btn, values=["left", "right", "double"], width=80, fg_color=COLOR_CARD, button_color=COLOR_INNER)
+        menu_btn.pack(side="left", padx=(0, 15))
+        
+        ctk.CTkLabel(f_col_r2, text="การค้นหา:", font=("Tahoma", 11), text_color=COLOR_MUTED).pack(side="left", padx=(0, 5))
+        self.var_color_mode = ctk.StringVar(value="once") # behavior: once/wait
+        menu_mode = ctk.CTkOptionMenu(f_col_r2, variable=self.var_color_mode, values=["once", "wait"], width=80, fg_color=COLOR_CARD, button_color=COLOR_INNER)
+        menu_mode.pack(side="left")
+        
+        # Row 3: Click Mode selection RadioButtons
+        f_col_r3 = ctk.CTkFrame(f_color_opts, fg_color="transparent")
+        f_col_r3.pack(fill="x", padx=15, pady=(4, 12))
+        
+        ctk.CTkLabel(f_col_r3, text="โหมดคลิก:", font=("Tahoma", 11), text_color=COLOR_MUTED).pack(side="left", padx=(0, 10))
+        self.var_color_click_mode = ctk.StringVar(value="normal")
+        rb_norm = ctk.CTkRadioButton(f_col_r3, text="ปกติ", variable=self.var_color_click_mode, value="normal", font=("Tahoma", 11), width=80)
+        rb_norm.pack(side="left", padx=5)
+        rb_bg_color = ctk.CTkRadioButton(f_col_r3, text="เบื้องหลัง (BG)", variable=self.var_color_click_mode, value="background", font=("Tahoma", 11))
+        rb_bg_color.pack(side="left", padx=5)
+        ToolTip(rb_bg_color, "⚠️ ส่งคำสั่งคลิกเบื้องหลัง (ไม่เลื่อนเมาส์)\n⚠️ ปลายทางอาจบล็อกคำสั่งนี้หากเป็นเบราว์เซอร์หรือเกม")
 
         ctk.CTkButton(t, text="เพิ่มคำสั่งเช็คสี (Add Action)", command=self.add_color_action, 
                        fg_color=COLOR_SUCCESS, hover_color="#059669", height=50, font=("Tahoma", 14, "bold")).pack(pady=(10, 10), padx=20, fill="x")
@@ -546,10 +577,10 @@ class TabsMixin:
         
         # Title Map
         title_map = {
-            "click": "Mouse Click", "text": "Type Text", "hotkey": "Press Key", "wait": "Delay", 
-            "image_search": "Find Image", "color_search": "Find Color", "multi_color_check": "Multi-Color",
-            "ocr_search": "OCR Read", "logic_if": "IF (ถ้า...เป็นจริง)", "logic_jump": "GOTO (กระโดดไปที่)", "logic_else": "ELSE (ถ้าไม่จริงทำส่วนนี้)", "logic_label": "จุดอ้างอิง (Label)",
-            "var_set": "Set Variable", "var_math": "Calculate"
+            "click": "🖱️ Mouse Click", "text": "⌨️ Type Text", "hotkey": "🎹 Press Key", "wait": "⏱️ Delay", 
+            "image_search": "🔍 Find Image", "color_search": "🎨 Find Color", "multi_color_check": "🌈 Multi-Color",
+            "ocr_search": "📝 OCR Read", "logic_if": "❓ IF (ถ้า...เป็นจริง)", "logic_jump": "↩ GOTO (กระโดดไปที่)", "logic_else": "↪ ELSE (ถ้าไม่จริงทำส่วนนี้)", "logic_label": "⚓ จุดอ้างอิง (Label)",
+            "var_set": "💾 Set Variable", "var_math": "🧮 Calculate"
         }
         
         # Description Logic
