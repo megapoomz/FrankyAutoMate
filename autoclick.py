@@ -96,7 +96,7 @@ class AutoMationApp(ctk.CTk, HotkeyMixin, PresetMixin, EngineMixin, ActionMixin,
         self.var_stealth_timing_val = ctk.DoubleVar(value=0.2)
         self.var_stealth_hide_window = ctk.BooleanVar(value=False)
         self.var_stealth_random_title = ctk.BooleanVar(value=False)
-        self.var_stealth_sendinput = ctk.BooleanVar(value=False)
+        self.var_stealth_sendinput = ctk.BooleanVar(value=True)
         self.var_show_overlay = ctk.BooleanVar(value=True)
         self.var_img_conf = ctk.DoubleVar(value=0.75)
         self.original_title = f"Franky AutoMate v{APP_VERSION}"

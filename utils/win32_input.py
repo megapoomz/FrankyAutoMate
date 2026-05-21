@@ -59,52 +59,44 @@ def precise_sleep(duration):
 
 
 def send_input_click(x, y, button="left"):
-    """Perform a mouse click using Win32 SendInput API"""
-    screen_w = ctypes.windll.user32.GetSystemMetrics(78)
-    screen_h = ctypes.windll.user32.GetSystemMetrics(79)
-    v_left = ctypes.windll.user32.GetSystemMetrics(76)
-    v_top = ctypes.windll.user32.GetSystemMetrics(77)
-    if screen_w == 0: screen_w = ctypes.windll.user32.GetSystemMetrics(0)
-    if screen_h == 0: screen_h = ctypes.windll.user32.GetSystemMetrics(1)
+    """Perform a mouse click using Win32 SendInput API with bulletproof SetCursorPos absolute positioning"""
+    # 1. Set cursor position directly using Win32 API (bypasses all coordinate mapping and multi-monitor scaling issues)
+    ctypes.windll.user32.SetCursorPos(int(x), int(y))
     
-    abs_x = int(((x - v_left) * 65535) / screen_w)
-    abs_y = int(((y - v_top) * 65535) / screen_h)
+    # 2. Trigger a micro relative movement of 0 pixels to force Windows to update mouse hover state for the window under cursor
+    move_input = INPUT(type=INPUT_MOUSE)
+    move_input.mi.dx = 0
+    move_input.mi.dy = 0
+    move_input.mi.dwFlags = MOUSEEVENTF_MOVE
+    ctypes.windll.user32.SendInput(1, ctypes.byref(move_input), ctypes.sizeof(INPUT))
     
-    # Mouse down & up
+    time.sleep(random.uniform(0.015, 0.025)) # Focus stabilization / mouse state update
+    
+    # 3. Mouse down & up events at the CURRENT cursor position (dx=0, dy=0, relative)
     down_input = INPUT(type=INPUT_MOUSE)
     up_input = INPUT(type=INPUT_MOUSE)
     
-    down_input.mi.dx = abs_x
-    down_input.mi.dy = abs_y
-    up_input.mi.dx = abs_x
-    up_input.mi.dy = abs_y
+    down_input.mi.dx = 0
+    down_input.mi.dy = 0
+    up_input.mi.dx = 0
+    up_input.mi.dy = 0
     
     if button == "left" or button == "double":
-        down_input.mi.dwFlags = MOUSEEVENTF_LEFTDOWN | MOUSEEVENTF_ABSOLUTE | 0x4000
-        up_input.mi.dwFlags = MOUSEEVENTF_LEFTUP | MOUSEEVENTF_ABSOLUTE | 0x4000
+        down_input.mi.dwFlags = MOUSEEVENTF_LEFTDOWN
+        up_input.mi.dwFlags = MOUSEEVENTF_LEFTUP
     elif button == "right":
-        down_input.mi.dwFlags = MOUSEEVENTF_RIGHTDOWN | MOUSEEVENTF_ABSOLUTE | 0x4000
-        up_input.mi.dwFlags = MOUSEEVENTF_RIGHTUP | MOUSEEVENTF_ABSOLUTE | 0x4000
+        down_input.mi.dwFlags = MOUSEEVENTF_RIGHTDOWN
+        up_input.mi.dwFlags = MOUSEEVENTF_RIGHTUP
     else:
-        # middle or other fallbacks
-        down_input.mi.dwFlags = MOUSEEVENTF_LEFTDOWN | MOUSEEVENTF_ABSOLUTE | 0x4000
-        up_input.mi.dwFlags = MOUSEEVENTF_LEFTUP | MOUSEEVENTF_ABSOLUTE | 0x4000
+        down_input.mi.dwFlags = MOUSEEVENTF_LEFTDOWN
+        up_input.mi.dwFlags = MOUSEEVENTF_LEFTUP
         
     def _do_click():
-        # Move mouse
-        move_input = INPUT(type=INPUT_MOUSE)
-        move_input.mi.dx = abs_x
-        move_input.mi.dy = abs_y
-        move_input.mi.dwFlags = MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE | 0x4000
-        ctypes.windll.user32.SendInput(1, ctypes.byref(move_input), ctypes.sizeof(INPUT))
-        
-        time.sleep(random.uniform(0.01, 0.02))
-        
         # Mouse down
         ctypes.windll.user32.SendInput(1, ctypes.byref(down_input), ctypes.sizeof(INPUT))
         
-        # High precision hold duration to prevent missed clicks without burning CPU
-        hold_time = random.uniform(0.06, 0.12)
+        # High precision hold duration (makes sure the button is held long enough for target apps/games to register)
+        hold_time = random.uniform(0.08, 0.15)
         precise_sleep(hold_time)
             
         # Mouse up
@@ -112,25 +104,18 @@ def send_input_click(x, y, button="left"):
 
     _do_click()
     if button == "double":
-        time.sleep(0.05)
+        # Double click delay for human emulation
+        time.sleep(random.uniform(0.05, 0.10))
         _do_click()
 
 def send_input_move(x, y):
-    """Move mouse using Win32 SendInput API"""
-    screen_w = ctypes.windll.user32.GetSystemMetrics(78)
-    screen_h = ctypes.windll.user32.GetSystemMetrics(79)
-    v_left = ctypes.windll.user32.GetSystemMetrics(76)
-    v_top = ctypes.windll.user32.GetSystemMetrics(77)
-    if screen_w == 0: screen_w = ctypes.windll.user32.GetSystemMetrics(0)
-    if screen_h == 0: screen_h = ctypes.windll.user32.GetSystemMetrics(1)
-    
-    abs_x = int(((x - v_left) * 65535) / screen_w)
-    abs_y = int(((y - v_top) * 65535) / screen_h)
-    
+    """Move mouse using Win32 API with SetCursorPos for pixel accuracy"""
+    ctypes.windll.user32.SetCursorPos(int(x), int(y))
+    # Send relative micro-move to force cursor hover update
     move_input = INPUT(type=INPUT_MOUSE)
-    move_input.mi.dx = abs_x
-    move_input.mi.dy = abs_y
-    move_input.mi.dwFlags = MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE | 0x4000
+    move_input.mi.dx = 0
+    move_input.mi.dy = 0
+    move_input.mi.dwFlags = MOUSEEVENTF_MOVE
     ctypes.windll.user32.SendInput(1, ctypes.byref(move_input), ctypes.sizeof(INPUT))
 
 def send_unicode_char(char):

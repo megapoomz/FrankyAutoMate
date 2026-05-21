@@ -762,19 +762,29 @@ class EngineMixin:
         self.show_click_marker(x, y)
         
         # --- Normal Mode Restoration & Focus Recovery ---
-        if mode == "normal" and self.target_hwnd and win32gui.IsWindow(self.target_hwnd):
-            try:
-                # If window is minimized (iconic), restore it first
-                if win32gui.IsIconic(self.target_hwnd):
-                    win32gui.ShowWindow(self.target_hwnd, win32con.SW_RESTORE)
-                    time.sleep(0.15) # Wait for restore animation
-                
-                if win32gui.GetForegroundWindow() != self.target_hwnd:
-                    win32api.keybd_event(18, 0, 0, 0)
-                    win32gui.SetForegroundWindow(self.target_hwnd)
-                    win32api.keybd_event(18, 0, 2, 0)
-                    time.sleep(0.10) # Focus stabilization
-            except: pass
+        if mode == "normal":
+            hwnd_to_focus = self.target_hwnd
+            if not hwnd_to_focus:
+                try:
+                    hwnd_at_pt = win32gui.WindowFromPoint((int(x), int(y)))
+                    if hwnd_at_pt:
+                        hwnd_to_focus = win32gui.GetAncestor(hwnd_at_pt, win32con.GA_ROOT)
+                except:
+                    pass
+            
+            if hwnd_to_focus and win32gui.IsWindow(hwnd_to_focus):
+                try:
+                    # If window is minimized (iconic), restore it first
+                    if win32gui.IsIconic(hwnd_to_focus):
+                        win32gui.ShowWindow(hwnd_to_focus, win32con.SW_RESTORE)
+                        time.sleep(0.15) # Wait for restore animation
+                    
+                    if win32gui.GetForegroundWindow() != hwnd_to_focus:
+                        win32api.keybd_event(18, 0, 0, 0)
+                        win32gui.SetForegroundWindow(hwnd_to_focus)
+                        win32api.keybd_event(18, 0, 2, 0)
+                        time.sleep(0.15) # Focus stabilization
+                except: pass
 
         # Stealth Movement
         if self.var_stealth_move.get():
@@ -785,18 +795,19 @@ class EngineMixin:
                  send_input_click(x, y, button)
         else:
              # Use explicit mouseDown/mouseUp with hold time for maximum compatibility instead of instant clicks
+             click_btn = "left" if button == "double" else button
              if button == "double":
-                  pyautogui.mouseDown(x=x, y=y, button=button)
+                  pyautogui.mouseDown(x=x, y=y, button=click_btn)
                   time.sleep(random.uniform(0.06, 0.12))
-                  pyautogui.mouseUp(x=x, y=y, button=button)
+                  pyautogui.mouseUp(x=x, y=y, button=click_btn)
                   time.sleep(random.uniform(0.04, 0.08))
-                  pyautogui.mouseDown(x=x, y=y, button=button)
+                  pyautogui.mouseDown(x=x, y=y, button=click_btn)
                   time.sleep(random.uniform(0.06, 0.12))
-                  pyautogui.mouseUp(x=x, y=y, button=button)
+                  pyautogui.mouseUp(x=x, y=y, button=click_btn)
              else:
-                  pyautogui.mouseDown(x=x, y=y, button=button)
+                  pyautogui.mouseDown(x=x, y=y, button=click_btn)
                   time.sleep(random.uniform(0.06, 0.12))
-                  pyautogui.mouseUp(x=x, y=y, button=button)
+                  pyautogui.mouseUp(x=x, y=y, button=click_btn)
 
 
     def get_cached_screenshot(self, region=None):

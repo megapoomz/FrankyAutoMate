@@ -29,6 +29,7 @@ class PresetMixin:
             preset["stealth_timing"] = self.var_stealth_timing.get()
             preset["stealth_timing_val"] = self.var_stealth_timing_val.get()
             preset["show_overlay"] = self.var_show_overlay.get()
+            preset["stealth_sendinput"] = self.var_stealth_sendinput.get()
 
     def load_preset_to_ui(self, index):
         if 0 <= index < len(self.presets):
@@ -61,6 +62,7 @@ class PresetMixin:
             self.var_stealth_timing.set(preset.get("stealth_timing", False))
             self.var_stealth_timing_val.set(preset.get("stealth_timing_val", 0.2))
             self.var_show_overlay.set(preset.get("show_overlay", True))
+            self.var_stealth_sendinput.set(preset.get("stealth_sendinput", True))
             
             self.update_list_display()
 
