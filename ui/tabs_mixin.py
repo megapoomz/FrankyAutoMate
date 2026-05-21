@@ -578,12 +578,18 @@ class TabsMixin:
         elif t == "logic_jump": desc = f"ข้ามไปทำงานที่ -> {action_data.get('target_label')}"
         elif t == "logic_else": desc = f"(ถ้าเงื่อนไขจริงทำเสร็จแล้ว ให้ข้ามส่วนนี้ไป)"
         elif t == "logic_if": 
-            cond_map = {"image_found": "เจอรูปภาพ", "color_match": "สีตรงกัน", "not_image_found": "ไม่เจอรูป", "not_color_match": "สีไม่ตรง"}
-            c_txt = cond_map.get(action_data.get('condition'), action_data.get('condition'))
-            desc = f"ตรวจสอบ: {c_txt}"
+            cond = action_data.get('condition')
+            if cond == "var_compare":
+                desc = f"If: ${action_data.get('left')} {action_data.get('op')} {action_data.get('right')} -> {action_data.get('target_label')}"
+            else:
+                cond_map = {"image_found": "เจอรูปภาพ", "color_match": "สีตรงกัน", "not_image_found": "ไม่เจอรูป", "not_color_match": "สีไม่ตรง"}
+                c_txt = cond_map.get(cond, cond)
+                desc = f"ตรวจสอบ: {c_txt} -> {action_data.get('target_label')}"
         elif t == "ocr_search": desc = f"ค้นหาข้อความ \"{action_data.get('text')}\""
         elif t == "var_set": desc = f"${action_data.get('name')} = {action_data.get('value')}"
-        elif t == "var_math": desc = f"${action_data.get('name')} {action_data.get('op')} {action_data.get('value')}"
+        elif t == "var_math":
+            op_sym = {"add": "+", "sub": "-", "mul": "*", "div": "/"}.get(action_data.get('op'), action_data.get('op'))
+            desc = f"${action_data.get('name')} {op_sym}= {action_data.get('value')}"
 
         # Title Label
         lbl_title = ctk.CTkLabel(f_content, text=title_map.get(t, "Action"), font=("Tahoma", 12, "bold"), text_color=COLOR_ACCENT, anchor="w")

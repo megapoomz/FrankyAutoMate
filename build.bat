@@ -79,8 +79,8 @@ if exist %ISCC% (
     %ISCC% /DMyAppVersion="!VERSION!" setup_script.iss
     echo    - Installer created in Output/ folder
 ) else (
-    echo    [WARNING] Inno Setup compiler (ISCC.exe) not found at default location.
-    echo    Skipping installer creation. (Install Inno Setup to enable this step)
+    echo    [WARNING] Inno Setup compiler ISCC.exe not found at default location.
+    echo    Skipping installer creation. Install Inno Setup to enable this step
 )
 
 echo ===================================================

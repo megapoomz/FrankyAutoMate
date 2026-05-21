@@ -19,6 +19,17 @@ from autoclick import AutoMationApp
 
 def main():
     """Start the Franky AutoMate application"""
+    # Set Windows DPI awareness to prevent coordinate mismatches
+    if os.name == 'nt':
+        try:
+            import ctypes
+            ctypes.windll.shcore.SetProcessDpiAwareness(2) # PROCESS_PER_MONITOR_DPI_AWARE
+        except Exception:
+            try:
+                ctypes.windll.user32.SetProcessDPIAware()
+            except Exception:
+                pass
+
     app = AutoMationApp()
     app.mainloop()
 

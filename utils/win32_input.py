@@ -45,6 +45,19 @@ def send_hardware_key(key_str, down=True):
     return True
 
 
+def precise_sleep(duration):
+    """High-precision sleep that doesn't consume 100% CPU like a traditional spinlock."""
+    if duration <= 0:
+        return
+    start_t = time.perf_counter()
+    # If duration is long enough, use standard time.sleep to yield CPU to the OS
+    if duration > 0.015:
+        time.sleep(duration - 0.005)
+    # Spin lock only the remaining milliseconds for sub-millisecond precision
+    while time.perf_counter() - start_t < duration:
+        pass
+
+
 def send_input_click(x, y, button="left"):
     """Perform a mouse click using Win32 SendInput API"""
     screen_w = ctypes.windll.user32.GetSystemMetrics(78)
@@ -57,39 +70,44 @@ def send_input_click(x, y, button="left"):
     abs_x = int(((x - v_left) * 65535) / screen_w)
     abs_y = int(((y - v_top) * 65535) / screen_h)
     
-    # Move mouse
-    move_input = INPUT(type=INPUT_MOUSE)
-    move_input.mi.dx = abs_x
-    move_input.mi.dy = abs_y
-    move_input.mi.dwFlags = MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE | 0x4000
-    ctypes.windll.user32.SendInput(1, ctypes.byref(move_input), ctypes.sizeof(INPUT))
-    
-    time.sleep(random.uniform(0.01, 0.03))
-    
-    # Mouse down
+    # Mouse down & up
     down_input = INPUT(type=INPUT_MOUSE)
     up_input = INPUT(type=INPUT_MOUSE)
     
+    down_input.mi.dx = abs_x
+    down_input.mi.dy = abs_y
+    up_input.mi.dx = abs_x
+    up_input.mi.dy = abs_y
+    
     if button == "left" or button == "double":
-        down_input.mi.dwFlags = MOUSEEVENTF_LEFTDOWN
-        up_input.mi.dwFlags = MOUSEEVENTF_LEFTUP
+        down_input.mi.dwFlags = MOUSEEVENTF_LEFTDOWN | MOUSEEVENTF_ABSOLUTE | 0x4000
+        up_input.mi.dwFlags = MOUSEEVENTF_LEFTUP | MOUSEEVENTF_ABSOLUTE | 0x4000
     elif button == "right":
-        down_input.mi.dwFlags = MOUSEEVENTF_RIGHTDOWN
-        up_input.mi.dwFlags = MOUSEEVENTF_RIGHTUP
+        down_input.mi.dwFlags = MOUSEEVENTF_RIGHTDOWN | MOUSEEVENTF_ABSOLUTE | 0x4000
+        up_input.mi.dwFlags = MOUSEEVENTF_RIGHTUP | MOUSEEVENTF_ABSOLUTE | 0x4000
     else:
         # middle or other fallbacks
-        down_input.mi.dwFlags = MOUSEEVENTF_LEFTDOWN
-        up_input.mi.dwFlags = MOUSEEVENTF_LEFTUP
+        down_input.mi.dwFlags = MOUSEEVENTF_LEFTDOWN | MOUSEEVENTF_ABSOLUTE | 0x4000
+        up_input.mi.dwFlags = MOUSEEVENTF_LEFTUP | MOUSEEVENTF_ABSOLUTE | 0x4000
         
     def _do_click():
+        # Move mouse
+        move_input = INPUT(type=INPUT_MOUSE)
+        move_input.mi.dx = abs_x
+        move_input.mi.dy = abs_y
+        move_input.mi.dwFlags = MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE | 0x4000
+        ctypes.windll.user32.SendInput(1, ctypes.byref(move_input), ctypes.sizeof(INPUT))
+        
+        time.sleep(random.uniform(0.01, 0.02))
+        
+        # Mouse down
         ctypes.windll.user32.SendInput(1, ctypes.byref(down_input), ctypes.sizeof(INPUT))
         
-        # High precision hold duration to prevent missed clicks
+        # High precision hold duration to prevent missed clicks without burning CPU
         hold_time = random.uniform(0.06, 0.12)
-        start_t = time.perf_counter()
-        while time.perf_counter() - start_t < hold_time:
-            pass
+        precise_sleep(hold_time)
             
+        # Mouse up
         ctypes.windll.user32.SendInput(1, ctypes.byref(up_input), ctypes.sizeof(INPUT))
 
     _do_click()

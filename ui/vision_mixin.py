@@ -62,7 +62,12 @@ class VisionMixin:
         self.btn_manual_tess = ctk.CTkButton(f_info, text="เลือกไฟล์ tesseract.exe เอง", 
                                               command=self.browse_tesseract_path,
                                               fg_color="#334155", hover_color="#475569", height=32, font=("Tahoma", 11, "bold"))
-        self.btn_manual_tess.pack(pady=(0, 15), padx=20, fill="x")
+        self.btn_manual_tess.pack(pady=(0, 10), padx=20, fill="x")
+
+        self.btn_install_dep = ctk.CTkButton(f_info, text="ติดตั้ง AI Dependencies อัตโนมัติ", 
+                                              command=self.install_ai_dependencies,
+                                              fg_color="#10b981", hover_color="#059669", height=32, font=("Tahoma", 11, "bold"))
+        self.btn_install_dep.pack(pady=(0, 15), padx=20, fill="x")
 
     def browse_tesseract_path(self):
         from tkinter import filedialog
