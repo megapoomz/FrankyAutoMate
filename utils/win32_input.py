@@ -20,6 +20,47 @@ SCAN_CODES = {
     'f11': 0x57, 'f12': 0x58, 'win': 0xDB
 }
 
+# Global screen metrics cache variables for high performance & robustness
+_screen_w = ctypes.windll.user32.GetSystemMetrics(78)
+_screen_h = ctypes.windll.user32.GetSystemMetrics(79)
+_screen_x = ctypes.windll.user32.GetSystemMetrics(76)
+_screen_y = ctypes.windll.user32.GetSystemMetrics(77)
+if _screen_w == 0:
+    _screen_w = ctypes.windll.user32.GetSystemMetrics(0)
+    _screen_h = ctypes.windll.user32.GetSystemMetrics(1)
+    _screen_x = 0
+    _screen_y = 0
+
+_metrics_last_refresh = time.monotonic()
+_METRICS_REFRESH_INTERVAL = 30  # seconds between auto-refreshes
+
+def refresh_screen_metrics():
+    """Refresh cached multi-monitor metrics"""
+    global _screen_w, _screen_h, _screen_x, _screen_y, _metrics_last_refresh
+    _screen_w = ctypes.windll.user32.GetSystemMetrics(78)
+    _screen_h = ctypes.windll.user32.GetSystemMetrics(79)
+    _screen_x = ctypes.windll.user32.GetSystemMetrics(76)
+    _screen_y = ctypes.windll.user32.GetSystemMetrics(77)
+    if _screen_w == 0:
+        _screen_w = ctypes.windll.user32.GetSystemMetrics(0)
+        _screen_h = ctypes.windll.user32.GetSystemMetrics(1)
+        _screen_x = 0
+        _screen_y = 0
+    _metrics_last_refresh = time.monotonic()
+
+def _get_screen_metrics():
+    """Get screen metrics with non-zero fallback for safety, refreshing cache if stale"""
+    global _screen_w, _screen_h, _screen_x, _screen_y, _metrics_last_refresh
+    if time.monotonic() - _metrics_last_refresh > _METRICS_REFRESH_INTERVAL:
+        refresh_screen_metrics()
+    
+    # Fallbacks in case metrics return 0 or invalid values
+    w = _screen_w if _screen_w > 0 else 1920
+    h = _screen_h if _screen_h > 0 else 1080
+    x = _screen_x
+    y = _screen_y
+    return w, h, x, y
+
 def send_hardware_key(key_str, down=True):
     """Sends a hardware scan code keypress that works in ALL DirectInput games"""
     key_str = key_str.lower()
@@ -60,12 +101,7 @@ def precise_sleep(duration):
 
 def send_input_click(x, y, button="left"):
     """Perform a mouse click using Win32 SendInput API"""
-    screen_w = ctypes.windll.user32.GetSystemMetrics(78)
-    screen_h = ctypes.windll.user32.GetSystemMetrics(79)
-    v_left = ctypes.windll.user32.GetSystemMetrics(76)
-    v_top = ctypes.windll.user32.GetSystemMetrics(77)
-    if screen_w == 0: screen_w = ctypes.windll.user32.GetSystemMetrics(0)
-    if screen_h == 0: screen_h = ctypes.windll.user32.GetSystemMetrics(1)
+    screen_w, screen_h, v_left, v_top = _get_screen_metrics()
     
     abs_x = int(((x - v_left) * 65535) / screen_w)
     abs_y = int(((y - v_top) * 65535) / screen_h)
@@ -112,12 +148,7 @@ def send_input_click(x, y, button="left"):
 
 def send_input_move(x, y):
     """Move mouse using Win32 SendInput API"""
-    screen_w = ctypes.windll.user32.GetSystemMetrics(78)
-    screen_h = ctypes.windll.user32.GetSystemMetrics(79)
-    v_left = ctypes.windll.user32.GetSystemMetrics(76)
-    v_top = ctypes.windll.user32.GetSystemMetrics(77)
-    if screen_w == 0: screen_w = ctypes.windll.user32.GetSystemMetrics(0)
-    if screen_h == 0: screen_h = ctypes.windll.user32.GetSystemMetrics(1)
+    screen_w, screen_h, v_left, v_top = _get_screen_metrics()
     
     abs_x = int(((x - v_left) * 65535) / screen_w)
     abs_y = int(((y - v_top) * 65535) / screen_h)

@@ -32,6 +32,51 @@ from utils.win32_input import send_input_click, send_input_move, send_input_text
 
 class EngineMixin:
     """Handles automation execution, background runner, and single action logic"""
+
+    @staticmethod
+    def _make_key_lparam(scan: int, repeat: int = 1, extended: bool = False, prev_state: bool = False, transition: bool = False) -> int:
+        """Build Win32 lParam for key messages (WM_KEYDOWN/UP/SYSKEYDOWN/UP)."""
+        lp = repeat & 0xFFFF
+        lp |= (scan & 0xFF) << 16
+        if extended:
+            lp |= 1 << 24
+        if prev_state:
+            lp |= 1 << 30
+        if transition:
+            lp |= 1 << 31
+        return lp
+
+    def _get_gray_template(self, path: str, img = None):
+        """Get or load template image, converting to grayscale, with image cache eviction strategy."""
+        if not hasattr(self, 'image_cache') or self.image_cache is None:
+            self.image_cache = {}
+
+        if path in self.image_cache:
+            return self.image_cache[path]
+
+        if img is not None:
+            template = img
+        else:
+            import cv2
+            template = cv2.imread(path)
+            if template is None:
+                return None
+
+        # Convert to grayscale if it is a color image (3 channels)
+        if len(template.shape) == 3:
+            import cv2
+            template = cv2.cvtColor(template, cv2.COLOR_BGR2GRAY)
+
+        # Enforce Cache Capping
+        from core.constants import IMAGE_CACHE_MAX_SIZE, IMAGE_CACHE_EVICT_COUNT
+        if len(self.image_cache) >= IMAGE_CACHE_MAX_SIZE:
+            keys_to_remove = list(self.image_cache.keys())[:IMAGE_CACHE_EVICT_COUNT]
+            for k in keys_to_remove:
+                self.image_cache.pop(k, None)
+
+        self.image_cache[path] = template
+        return template
+
     # --- Thread-Safe UI Helpers ---
     def safe_update_ui(self, widget_name: str, **kwargs):
         """Schedule UI updates on the main thread to prevent crashes"""
@@ -891,11 +936,17 @@ class EngineMixin:
         self.log_message(f"[JUMP] กระโดดไปที่: {target_label}")
         return self._find_label_index(target_label)
 
-    def _find_label_index(self, label_name: str) -> Optional[int]:
+    def _find_label_index(self, label_name: str, actions_list: Optional[List[Dict[str, Any]]] = None) -> Optional[int]:
         if not label_name: return None
-        if hasattr(self, '_label_map') and label_name in self._label_map:
-            return self._label_map[label_name]
-        for idx, act in enumerate(self.actions):
+        # Check cache/map
+        if actions_list is None:
+            if hasattr(self, '_label_index_cache') and isinstance(self._label_index_cache, dict) and label_name in self._label_index_cache:
+                return self._label_index_cache[label_name]
+            if hasattr(self, '_label_map') and isinstance(self._label_map, dict) and label_name in self._label_map:
+                return self._label_map[label_name]
+        
+        actions = actions_list if actions_list is not None else self.actions
+        for idx, act in enumerate(actions):
             if act["type"] == "logic_label" and act.get("name") == label_name:
                 return idx
         self.log_message(f"[ERROR] ไม่พบ Label ชื่อ '{label_name}'", "red")

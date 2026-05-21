@@ -2,7 +2,7 @@ import ctypes
 from ctypes import wintypes
 
 # --- App Info ---
-APP_VERSION = "1.5.5"
+APP_VERSION = "1.6.0"
 GITHUB_REPO = "megapoomz/FrankyAutoMate"
 GITHUB_API_URL = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
 
@@ -28,6 +28,8 @@ MOUSEEVENTF_LEFTDOWN = 0x0002
 MOUSEEVENTF_LEFTUP = 0x0004
 MOUSEEVENTF_RIGHTDOWN = 0x0008
 MOUSEEVENTF_RIGHTUP = 0x0010
+MOUSEEVENTF_MIDDLEDOWN = 0x0020
+MOUSEEVENTF_MIDDLEUP = 0x0040
 MOUSEEVENTF_ABSOLUTE = 0x8000
 KEYEVENTF_KEYDOWN = 0x0000
 KEYEVENTF_KEYUP = 0x0002
@@ -42,7 +44,7 @@ class MOUSEINPUT(ctypes.Structure):
         ("mouseData", wintypes.DWORD),
         ("dwFlags", wintypes.DWORD),
         ("time", wintypes.DWORD),
-        ("dwExtraInfo", ctypes.POINTER(ctypes.c_ulong)),
+        ("dwExtraInfo", ctypes.c_void_p),  # ULONG_PTR: must be pointer-sized for x64
     ]
 
 class KEYBDINPUT(ctypes.Structure):
@@ -51,7 +53,7 @@ class KEYBDINPUT(ctypes.Structure):
         ("wScan", wintypes.WORD),
         ("dwFlags", wintypes.DWORD),
         ("time", wintypes.DWORD),
-        ("dwExtraInfo", ctypes.POINTER(ctypes.c_ulong)),
+        ("dwExtraInfo", ctypes.c_void_p),  # ULONG_PTR: must be pointer-sized for x64
     ]
 
 class INPUT(ctypes.Structure):
@@ -62,3 +64,29 @@ class INPUT(ctypes.Structure):
         ("type", wintypes.DWORD),
         ("_input", _INPUT),
     ]
+
+# --- Engine Timing & Behavior Constants ---
+WAIT_MODE_TIMEOUT = 120        # Max seconds for image/color/OCR wait mode
+IMAGE_CACHE_MAX_SIZE = 256     # Max entries in template image cache
+IMAGE_CACHE_EVICT_COUNT = 50   # Entries to remove when cache is full
+SCREENSHOT_CACHE_TTL = 0.25    # Seconds to keep cached screenshot (per-instance)
+EMERGENCY_CORNER_PX = 5        # Pixels from corner for emergency stop
+EMERGENCY_CORNER_HOLD = 0.5    # Seconds to hold in corner to trigger stop
+FOCUS_DELAY_DEFAULT = 0.05     # Default focus delay in bg_runner (seconds)
+FOCUS_DELAY_STANDALONE = 0.15  # Focus delay for standalone perform_click
+HUMAN_MOVE_MAX_STEPS = 80     # Max steps for human-like mouse curves
+AUTO_SAVE_DEBOUNCE_MS = 1000  # Debounce interval for preset auto-save
+HOTKEY_COMMIT_DELAY_MS = 800  # Delay before committing recorded hotkey
+
+# --- Timing Delays (consolidated magic numbers) ---
+BG_ACTIVATION_SETTLE = 0.03    # Delay after window activation messages
+BG_HOVER_SETTLE = 0.03        # Delay for hover state before click
+BG_CLICK_HOLD_MIN = 0.08      # Min hold duration for bg clicks
+BG_CLICK_HOLD_MAX = 0.14      # Max hold duration for bg clicks
+PRE_CLICK_SETTLE = 0.03       # Delay before foreground click
+CLIPBOARD_SETTLE = 0.03       # Delay after clipboard copy
+PASTE_SETTLE = 0.05           # Delay after Ctrl+V paste
+TYPE_FINISH_SETTLE = 0.05     # Delay after typing finishes
+HOTKEY_INTER_KEY = 0.04       # Delay between key presses in hotkey
+HOTKEY_HOLD_DELAY = 0.05      # Hold time between press and release
+HOTKEY_PRE_DELAY = 0.03       # Delay before hotkey sequence
