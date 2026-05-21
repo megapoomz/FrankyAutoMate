@@ -10,3 +10,5 @@ psutil
 mss
 numpy
 pyperclip
+pytesseract
+
